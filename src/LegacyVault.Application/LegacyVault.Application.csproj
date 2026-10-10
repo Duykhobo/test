@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\LegacyVault.Domain\LegacyVault.Domain.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!--
+      Chỉ cần EF Core "lõi" để có DbSet<T> và các hàm async như SingleOrDefaultAsync.
+      KHÔNG có SqlServer ở đây: Application không biết dữ liệu nằm trong DB nào.
+    -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+  </ItemGroup>
+</Project>

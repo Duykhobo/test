@@ -1,0 +1,16 @@
+<Project>
+  <!--
+    File này được MSBuild tự động áp dụng cho MỌI .csproj nằm trong thư mục con.
+    Nhờ vậy 4 project không phải lặp lại cùng một cấu hình.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <!-- Bật kiểm tra null lúc biên dịch: string? = có thể null, string = không được null -->
+    <Nullable>enable</Nullable>
+    <!-- Tự động using System, System.Linq, System.Threading.Tasks... -->
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <!-- Khi nhóm đã quen, bật true để CI coi cảnh báo là lỗi (như CONTRIBUTING.md quy định) -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+</Project>

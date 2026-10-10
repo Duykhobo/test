@@ -1,0 +1,16 @@
+# Chạy SQL Server 2022 cho môi trường dev:  docker compose up -d
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: legacyvault-sql
+    environment:
+      ACCEPT_EULA: "Y"
+      # Mật khẩu chỉ dùng cho máy dev. Phải khớp với ConnectionStrings trong appsettings.Development.json
+      MSSQL_SA_PASSWORD: "LegacyVault_Dev123!"
+    ports:
+      - "1433:1433"
+    volumes:
+      - legacyvault-sql-data:/var/opt/mssql
+
+volumes:
+  legacyvault-sql-data:

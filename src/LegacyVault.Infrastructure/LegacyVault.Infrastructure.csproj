@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\LegacyVault.Application\LegacyVault.Application.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Dùng các kiểu của ASP.NET Core (HttpContext, Authentication) mà không cần thêm package -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
+    <PackageReference Include="Konscious.Security.Cryptography.Argon2" />
+    <!-- Cần cho lệnh "dotnet ef migrations add". PrivateAssets=all: không lan sang project khác -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+</Project>

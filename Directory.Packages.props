@@ -1,0 +1,20 @@
+<Project>
+  <!--
+    Central Package Management: version của mọi NuGet package khai báo DUY NHẤT ở đây.
+    Trong .csproj chỉ ghi <PackageReference Include="Tên" /> (không có Version),
+    nên 4 người không bao giờ lệch version với nhau.
+  -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Truy cập dữ liệu -->
+    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.0" />
+    <!-- Xác thực bằng JWT -->
+    <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
+    <!-- Băm mật khẩu Argon2id -->
+    <PackageVersion Include="Konscious.Security.Cryptography.Argon2" Version="1.3.1" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <!-- Mã định danh kho bí mật cục bộ của "dotnet user-secrets" (lưu ngoài thư mục dự án, không lên git) -->
+    <UserSecretsId>legacyvault-api-dev</UserSecretsId>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Api là "điểm lắp ráp": tham chiếu cả Application và Infrastructure -->
+    <ProjectReference Include="..\LegacyVault.Application\LegacyVault.Application.csproj" />
+    <ProjectReference Include="..\LegacyVault.Infrastructure\LegacyVault.Infrastructure.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Lệnh "dotnet ef" cần package Design ở startup project -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+</Project>

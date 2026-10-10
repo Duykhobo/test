@@ -1,0 +1,41 @@
+# Thử API ngay trong VS Code (extension "REST Client"), Rider hoặc Visual Studio.
+# Cookie được tự lưu giữa các request, giống trình duyệt.
+
+@api = http://localhost:5000/api/v1
+
+### 1. Đăng nhập đúng → 200, nhận cookie lv_access + lv_refresh
+POST {{api}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "owner@legacyvault.local",
+  "password": "Password123!",
+  "rememberMe": true
+}
+
+### 2. Xem phiên hiện tại (dùng cookie lv_access) → 200
+GET {{api}}/auth/session
+
+### 3. Làm mới phiên (dùng cookie lv_refresh) → 200, cookie mới
+POST {{api}}/auth/refresh
+
+### 4. Đăng xuất → 204, cookie bị xóa
+POST {{api}}/auth/logout
+Content-Type: application/json
+
+{ "revokeAllDevices": false }
+
+### 5. Sau khi đăng xuất, xem phiên → 401
+GET {{api}}/auth/session
+
+### 6. Sai mật khẩu → 401, kèm attemptsRemaining (sai 5 lần → 423 ACCOUNT_LOCKED)
+POST {{api}}/auth/login
+Content-Type: application/json
+
+{ "email": "owner@legacyvault.local", "password": "sai-mat-khau" }
+
+### 7. Thiếu dữ liệu → 400 VALIDATION_ERROR
+POST {{api}}/auth/login
+Content-Type: application/json
+
+{ "email": "khong-phai-email" }

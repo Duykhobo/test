@@ -1,0 +1,98 @@
+using System.Text;
+using LegacyVault.Application.Common.Interfaces;
+using LegacyVault.Infrastructure.Persistence;
+using LegacyVault.Infrastructure.Security;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.JsonWebTokens;
+using Microsoft.IdentityModel.Tokens;
+
+namespace LegacyVault.Infrastructure;
+
+public static class DependencyInjection
+{
+    public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
+    {
+        // ---- Đồng hồ hệ thống (test có thể thay bằng đồng hồ giả) ----
+        services.AddSingleton(TimeProvider.System);
+
+        // ---- Cơ sở dữ liệu ----
+        var connectionString = configuration.GetConnectionString("Default")
+            ?? throw new InvalidOperationException("Thiếu ConnectionStrings:Default trong appsettings.");
+
+        services.AddDbContext<AppDbContext>(options => options.UseSqlServer(connectionString));
+        // Ai xin IAppDbContext sẽ nhận đúng AppDbContext của request hiện tại.
+        services.AddScoped<IAppDbContext>(sp => sp.GetRequiredService<AppDbContext>());
+
+        // ---- Bảo mật ----
+        services.AddSingleton<IPasswordHasher, Argon2PasswordHasher>();
+        services.AddSingleton<ITokenService, JwtTokenService>();
+        services.AddHttpContextAccessor();
+        services.AddScoped<ICurrentUser, CurrentUser>();
+
+        AddJwtAuthentication(services, configuration);
+
+        return services;
+    }
+
+    private static void AddJwtAuthentication(IServiceCollection services, IConfiguration configuration)
+    {
+        // Options pattern + kiểm tra ngay lúc khởi động: thiếu khóa thì app dừng với thông báo rõ ràng,
+        // thay vì chạy được rồi mới lỗi khi có người đăng nhập.
+        services.AddOptions<JwtOptions>()
+            .Bind(configuration.GetSection(JwtOptions.SectionName))
+            .Validate(
+                o => Encoding.UTF8.GetByteCount(o.SigningKey) >= 32,
+                "Jwt:SigningKey phải dài ít nhất 32 ký tự. Chạy trong thư mục src/LegacyVault.Api: " +
+                "dotnet user-secrets set \"Jwt:SigningKey\" \"<chuỗi ngẫu nhiên dài>\"")
+            .ValidateOnStart();
+
+        services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer();
+
+        // Cấu hình JwtBearer SAU khi đã có JwtOptions (lấy qua DI, không đọc config thủ công).
+        services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
+            .Configure<IOptions<JwtOptions>>((bearer, jwtOptions) =>
+            {
+                var jwt = jwtOptions.Value;
+
+                // Giữ nguyên tên claim "sub", "role" (mặc định .NET đổi sang URL dài khó dùng).
+                bearer.MapInboundClaims = false;
+
+                bearer.TokenValidationParameters = new TokenValidationParameters
+                {
+                    ValidateIssuer = true,
+                    ValidIssuer = jwt.Issuer,
+                    ValidateAudience = true,
+                    ValidAudience = jwt.Audience,
+                    ValidateIssuerSigningKey = true,
+                    IssuerSigningKey = JwtTokenService.CreateSigningKey(jwt.SigningKey),
+                    ValidateLifetime = true,
+                    ClockSkew = TimeSpan.FromSeconds(30), // mặc định 5 phút là quá rộng
+                    NameClaimType = JwtRegisteredClaimNames.Sub,
+                    RoleClaimType = JwtClaimTypes.Role, // để [Authorize(Roles = "ADMIN")] hoạt động
+                };
+
+                bearer.Events = new JwtBearerEvents
+                {
+                    // Mặc định JwtBearer đọc header "Authorization: Bearer xxx".
+                    // FE của nhóm dùng cookie HttpOnly nên ta lấy token từ cookie
+                    // (vẫn ưu tiên header nếu có, tiện khi thử bằng Postman).
+                    OnMessageReceived = context =>
+                    {
+                        var hasHeader = context.Request.Headers.Authorization.Count > 0;
+                        if (!hasHeader &&
+                            context.Request.Cookies.TryGetValue(AuthCookieNames.AccessToken, out var token))
+                        {
+                            context.Token = token;
+                        }
+                        return Task.CompletedTask;
+                    },
+                };
+            });
+
+        services.AddAuthorization();
+    }
+}
