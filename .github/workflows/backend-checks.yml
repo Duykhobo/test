@@ -45,3 +45,6 @@ jobs:
 
       - name: Run JWT token service checks
         run: dotnet run --file tests/security/JwtTokenServiceChecks.cs --configuration Release
+
+      - name: Run current session principal checks
+        run: dotnet run --file tests/security/CurrentSessionChecks.cs --configuration Release
