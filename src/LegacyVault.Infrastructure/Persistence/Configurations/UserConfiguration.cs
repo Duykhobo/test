@@ -10,12 +10,21 @@ namespace LegacyVault.Infrastructure.Persistence.Configurations;
 /// </summary>
 public sealed class UserConfiguration : IEntityTypeConfiguration<User>
 {
+    private const string RowVersionPropertyName = "RowVersion";
+    private const string RowVersionColumnName = "row_version";
+
     /// <summary>Cấu hình schema User, dùng chung giới hạn với Domain.</summary>
     /// <param name="builder">Builder mapping entity User.</param>
     public void Configure(EntityTypeBuilder<User> builder)
     {
         builder.ToTable("Users");
         builder.HasKey(u => u.Id);
+
+        // Shadow property: SQL Server sinh version; Domain/DTO không cần mang chi tiết persistence.
+        // EF đưa version gốc vào WHERE của UPDATE/DELETE để phát hiện ghi đè đồng thời.
+        builder.Property<byte[]>(RowVersionPropertyName)
+            .HasColumnName(RowVersionColumnName)
+            .IsRowVersion();
 
         builder.Property(u => u.Email).HasMaxLength(UserLimits.Email).IsRequired();
         // Unique index: DB tự chặn 2 tài khoản trùng email, kể cả khi code có bug.

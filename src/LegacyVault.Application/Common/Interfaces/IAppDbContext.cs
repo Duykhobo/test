@@ -29,7 +29,9 @@ public interface IAppDbContext
     /// <remarks>
     /// Một lần lưu không tự bảo vệ truy vấn trước đó khỏi race condition.
     /// Use case phải bổ sung transaction/concurrency control theo nghiệp vụ;
-    /// model hiện tại chưa cấu hình concurrency token.
+    /// User được mapping concurrency token tại Infrastructure; schema cần migration tương ứng.
+    /// Concurrency token chỉ phát hiện xung đột, không tự retry hoặc hợp nhất bộ đếm thất bại.
+    /// Refresh token/family vẫn cần cơ chế tiêu thụ và thu hồi nguyên tử riêng.
     /// </remarks>
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }
