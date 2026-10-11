@@ -9,15 +9,21 @@ namespace LegacyVault.Api.Controllers.V1;
 
 /// <summary>
 /// Đăng nhập / làm mới phiên / xem phiên / đăng xuất.
-/// URL khớp với FE: src/features/auth/api/authService.ts và src/app/providers/AuthBootstrap.tsx
+/// Contract backend mẫu; FE cần đối chiếu DTO trước tích hợp.
+/// Service đang là scaffold, chưa thể nghiệm thu chức năng xác thực.
 /// </summary>
 [Route("api/v1/auth")]
 public sealed class AuthController(IAuthService authService, AuthCookieWriter cookies) : ApiControllerBase
 {
-    /// <summary>POST /api/v1/auth/login</summary>
+    /// <summary>Nhận payload đăng nhập đã qua DataAnnotations và chuyển cho use case.</summary>
+    /// <param name="request">Thông tin đăng nhập; không ghi log mật khẩu.</param>
+    /// <param name="ct">Token hủy request.</param>
+    /// <returns>Session công khai và cookie khi thành công, ProblemDetails khi thất bại.</returns>
     [HttpPost("login")]
     [AllowAnonymous]
-    public async Task<IActionResult> Login(LoginRequest request, CancellationToken ct)
+    [ProducesResponseType<ApiResponse<AuthSessionDto>>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> Login([FromBody] LoginRequest request, CancellationToken ct)
     {
         var result = await authService.LoginAsync(request, ct);
         if (result.IsFailure)
@@ -33,8 +39,12 @@ public sealed class AuthController(IAuthService authService, AuthCookieWriter co
     /// POST /api/v1/auth/refresh — đổi refresh token (trong cookie) lấy cặp token mới.
     /// FE nên gọi khi một request bị 401, rồi thử lại request đó.
     /// </summary>
+    /// <param name="ct">Token hủy request.</param>
+    /// <returns>Session và cookie thay thế hoặc lỗi phiên.</returns>
     [HttpPost("refresh")]
     [AllowAnonymous]
+    [ProducesResponseType<ApiResponse<AuthSessionDto>>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> Refresh(CancellationToken ct)
     {
         Request.Cookies.TryGetValue(AuthCookieNames.RefreshToken, out var refreshToken);
@@ -51,8 +61,12 @@ public sealed class AuthController(IAuthService authService, AuthCookieWriter co
     }
 
     /// <summary>GET /api/v1/auth/session — FE gọi khi tải trang để biết ai đang đăng nhập.</summary>
+    /// <param name="ct">Token hủy request.</param>
+    /// <returns>Người dùng công khai hoặc lỗi xác thực.</returns>
     [HttpGet("session")]
     [Authorize] // không có access token hợp lệ → middleware trả 401, không vào tới đây
+    [ProducesResponseType<ApiResponse<CurrentSessionDto>>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> Session(CancellationToken ct)
     {
         var result = await authService.GetCurrentUserAsync(ct);
@@ -65,9 +79,15 @@ public sealed class AuthController(IAuthService authService, AuthCookieWriter co
     /// <remarks>
     /// [AllowAnonymous] vì access token có thể đã hết hạn mà người dùng vẫn phải đăng xuất được;
     /// phiên được nhận diện qua refresh token trong cookie.
+    /// AllowAnonymous không cho phép logout mọi thiết bị bằng token hết hạn/revoked;
+    /// use case phải xác minh quyền trước khi thu hồi các phiên khác.
     /// </remarks>
+    /// <param name="request">Tùy chọn thu hồi mọi thiết bị; body có thể thiếu.</param>
+    /// <param name="ct">Token hủy request.</param>
+    /// <returns>204 chỉ sau khi use case hoàn tất; lỗi không được coi là logout thành công.</returns>
     [HttpPost("logout")]
     [AllowAnonymous]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
     public async Task<IActionResult> Logout(
         [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] LogoutRequest? request,
         CancellationToken ct)

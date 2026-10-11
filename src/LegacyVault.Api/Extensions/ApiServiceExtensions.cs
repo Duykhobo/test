@@ -9,8 +9,19 @@ namespace LegacyVault.Api.Extensions;
 /// </summary>
 public static class ApiServiceExtensions
 {
+    /// <summary>Tên policy CORS dùng chung với pipeline.</summary>
     public const string FrontendCorsPolicy = "Frontend";
 
+    private const string CorsOriginsSection = "Cors:AllowedOrigins";
+    private const string ValidationErrorCode = "VALIDATION_ERROR";
+    private const string ErrorCodeExtension = "code";
+    private const string ValidationErrorTitle = "Dữ liệu gửi lên không hợp lệ.";
+    private const string ProblemJsonContentType = "application/problem+json";
+
+    /// <summary>Đăng ký controller, validation response, lỗi toàn cục, cookie writer và CORS.</summary>
+    /// <param name="services">Service collection của ứng dụng.</param>
+    /// <param name="configuration">Cấu hình API và danh sách origin cho phép.</param>
+    /// <returns>Service collection đã đăng ký hạ tầng HTTP.</returns>
     public static IServiceCollection AddApiServices(this IServiceCollection services, IConfiguration configuration)
     {
         services.AddControllers()
@@ -30,10 +41,10 @@ public static class ApiServiceExtensions
                     var problem = new ValidationProblemDetails(errors)
                     {
                         Status = StatusCodes.Status400BadRequest,
-                        Title = "Dữ liệu gửi lên không hợp lệ.",
+                        Title = ValidationErrorTitle,
                     };
-                    problem.Extensions["code"] = "VALIDATION_ERROR";
-                    return new BadRequestObjectResult(problem) { ContentTypes = { "application/problem+json" } };
+                    problem.Extensions[ErrorCodeExtension] = ValidationErrorCode;
+                    return new BadRequestObjectResult(problem) { ContentTypes = { ProblemJsonContentType } };
                 };
             });
 
@@ -44,12 +55,30 @@ public static class ApiServiceExtensions
         // CORS: FE chạy ở localhost:5173 (Vite), API ở localhost:5000 → khác origin.
         // Trình duyệt chặn trừ khi API cho phép rõ ràng. AllowCredentials để cookie được gửi kèm
         // (FE đặt withCredentials: true). Khi có AllowCredentials thì KHÔNG được dùng AllowAnyOrigin.
-        var allowedOrigins = configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
+        var allowedOrigins = configuration.GetSection(CorsOriginsSection).Get<string[]>() ?? [];
         services.AddCors(options => options.AddPolicy(FrontendCorsPolicy, policy => policy
             .WithOrigins(allowedOrigins)
             .AllowAnyHeader()
             .AllowAnyMethod()
             .AllowCredentials()));
+
+        // TODO: [BẢN THIẾT KẾ THỰC THI - DEVELOPER BLUEPRINT]
+        // 1. [MỤC TIÊU & NGHIỆP VỤ]: Bảo vệ Auth trước brute force/CPU exhaustion và CSRF.
+        // 2. [INPUT & OUTPUT]: Policy do chủ module chốt + cấu hình deploy -> đăng ký limiter/CSRF.
+        // 3. [CÁC BƯỚC TUẦN TỰ]:
+        //    - Chốt ngưỡng, cửa sổ, partition và giới hạn đồng thời trước khi viết config.
+        //    - Đăng ký named policies cho login/refresh/logout và áp dụng tại endpoint tương ứng.
+        //    - Trả 429 + Retry-After an toàn; không đưa email/token vào key/log công khai.
+        //    - Chốt same-site/cross-site deployment; dùng antiforgery token hoặc kiểm tra origin
+        //      theo policy đã kiểm chứng cho các POST dùng cookie, bao gồm login/logout.
+        //    - Đăng ký dịch vụ kiểm tra và thống nhất header/token contract với FE.
+        // 4. [HÀM / THƯ VIỆN]: ASP.NET Core AddRateLimiter, partitioned limiter,
+        //    EnableRateLimiting/RequireRateLimiting; AddAntiforgery nếu chọn antiforgery token.
+        // 5. [ĐIỀU KIỆN BIÊN & NGOẠI LỆ]: NAT nhiều user, IP spoof qua proxy,
+        //    proxy headers chỉ tin proxy cấu hình; limiter phải chạy trước Argon2.
+        //    CORS và SameSite=Lax không thay thế toàn bộ CSRF policy; origin cùng site vẫn cần xét.
+        //    Thiếu/sai CSRF proof phải từ chối trước mutation, cancellation phải propagate.
+        //    Chưa đăng ký limiter/CSRF ở scaffold này; không bật middleware khi thiếu dịch vụ.
 
         return services;
     }
