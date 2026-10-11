@@ -1,5 +1,8 @@
 # Thử API ngay trong VS Code (extension "REST Client"), Rider hoặc Visual Studio.
-# Cookie được tự lưu giữa các request, giống trình duyệt.
+# Đây là các kịch bản mục tiêu sau khi hoàn thiện AuthService/JwtTokenService.
+# Hiện service còn scaffold: request tới use case chưa triển khai sẽ trả 500.
+# Bật cookie jar trong HTTP client để dùng cookie giữa các request.
+# Khi triển khai CSRF, bổ sung proof/header đã chốt vào các POST trước khi nghiệm thu.
 
 @api = http://localhost:5000/api/v1
 
@@ -28,7 +31,7 @@ Content-Type: application/json
 ### 5. Sau khi đăng xuất, xem phiên → 401
 GET {{api}}/auth/session
 
-### 6. Sai mật khẩu → 401, kèm attemptsRemaining (sai 5 lần → 423 ACCOUNT_LOCKED)
+### 6. Sai mật khẩu → mục tiêu 401 INVALID_CREDENTIALS, không kèm attemptsRemaining
 POST {{api}}/auth/login
 Content-Type: application/json
 
@@ -39,3 +42,16 @@ POST {{api}}/auth/login
 Content-Type: application/json
 
 { "email": "khong-phai-email" }
+
+### 8. Email không tồn tại → mục tiêu cùng status/code/cấu trúc với mục 6
+POST {{api}}/auth/login
+Content-Type: application/json
+
+{ "email": "missing@example.test", "password": "sai-mat-khau" }
+
+### 9. Sau 5 lần sai, thử mật khẩu ĐÚNG → mục tiêu 423 và remainingSeconds
+# Chỉ công khai lockout sau khi chứng minh mật khẩu đúng; mật khẩu sai vẫn nhận lỗi chung.
+POST {{api}}/auth/login
+Content-Type: application/json
+
+{ "email": "owner@legacyvault.local", "password": "Password123!" }

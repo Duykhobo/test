@@ -1,0 +1,41 @@
+name: Backend checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend-checks:
+    name: Build and Auth checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Restore solution
+        run: dotnet restore LegacyVault.sln
+
+      - name: Restore Auth checks
+        run: dotnet restore tests/LegacyVault.AuthChecks/LegacyVault.AuthChecks.csproj
+
+      - name: Build solution
+        run: dotnet build LegacyVault.sln --configuration Release --no-restore
+
+      - name: Run validation and Domain checks
+        run: dotnet run --project tests/LegacyVault.AuthChecks --configuration Release --no-restore
+
+      - name: Run password hasher checks
+        run: dotnet run --file tests/security/PasswordHasherChecks.cs --configuration Release

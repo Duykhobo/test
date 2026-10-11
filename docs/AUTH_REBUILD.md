@@ -2,25 +2,27 @@
 
 AI dựng contract/scaffold và TODO blueprint; developer viết nghiệp vụ. Mỗi nhịp tối đa 2–3 file, build rồi dừng để developer commit. Jira chưa được cung cấp: LV-XXX là placeholder, không phải mã issue thực.
 
-## Trạng thái Domain scaffold
+## Trạng thái Domain hiện tại
 
-User và RefreshToken giữ nguyên property/schema, nhưng factory và method nghiệp vụ hiện ném NotImplementedException kèm tên method. EF Core vẫn materialize được bản ghi đã lưu bằng constructor private; không cần migration mới cho nhịp này. Policy 5 lần sai/15 phút vẫn là giá trị mẫu cũ, chủ module quyết định trước khi hoàn thiện.
+User đã triển khai NormalizeEmail/Create và các method lockout. RefreshToken đã triển khai factory, validation, expiry và revoke idempotent. Các phần này giữ schema hiện có; không cần migration mới cho thay đổi logic trong RAM. Policy hiện tại khóa 15 phút sau 5 lần sai.
 
-DbInitializer vẫn gọi User.Create khi database chưa có user. Vì vậy chạy trên database mới/rỗng sẽ dừng ở bước seed cho đến khi developer hoàn thiện factory; không bỏ qua lỗi để giả báo khởi tạo thành công. Database hiện có không bị xóa. Bộ AuthChecks chỉ xác minh DTO/validation, không chứng minh các method Domain đã hoạt động.
+DbInitializer có thể gọi password hasher và User.Create để seed khi database chưa có user. Seed chỉ được gọi ở Development và không ghi mật khẩu vào log. AuthChecks đã bao phủ validation/DTO, lockout và lifecycle refresh token trong RAM; chưa chứng minh persistence an toàn khi request đồng thời.
 
-Thứ tự developer đề xuất: User.NormalizeEmail/Create → các method lockout → RefreshToken factory/lifecycle → Infrastructure security → AuthService → kiểm tra HTTP và concurrency. Thêm kiểm tra hành vi Domain khi triển khai; không viết test coi NotImplementedException là nghiệp vụ đúng.
+Thứ tự còn lại: JwtTokenService → AuthService và persistence concurrency/transaction → HTTP security → integration checks. Không viết test coi NotImplementedException là nghiệp vụ đúng.
 
-## Trạng thái Security scaffold
+## Trạng thái Security hiện tại
 
-Argon2PasswordHasher.Hash/Verify và JwtTokenService.CreateAccessToken/CreateRefreshToken/HashRefreshToken/RefreshTokenLifetime hiện là TODO blueprint và ném NotImplementedException. Helper CreateSigningKey được giữ nguyên vì JwtBearer dùng để cấu hình validator; helper này chỉ bọc khóa đã cấu hình, không sinh hoặc ký token. Không thêm dependencies. Các constructor options/TimeProvider của token service cần được developer khôi phục khi triển khai theo blueprint.
+Argon2PasswordHasher.Hash/Verify đã triển khai bằng package có sẵn, giữ định dạng hash cũ và whitelist bộ tham số hiện tại. Tham số serialize và độ dài Base64 được tính từ một nguồn cấu hình. Khi nâng tham số phải hỗ trợ hash cũ trước khi triển khai. PasswordHasherChecks chạy riêng để kiểm tra hành vi này.
 
-DbInitializer trên database rỗng gọi Hash trước khi gọi User.Create, nên hiện sẽ dừng ngay tại password hasher chưa triển khai. Database hiện hữu không bị sửa/xóa bởi nhịp scaffold. Không coi build/DTO checks pass là bằng chứng mật mã hoặc xác thực đã hoạt động.
+JwtTokenService.CreateAccessToken/CreateRefreshToken/HashRefreshToken/RefreshTokenLifetime vẫn là TODO blueprint và ném NotImplementedException. Helper CreateSigningKey phục vụ JwtBearer validator, không cấp token. AuthService cũng còn scaffold; seed thành công và checks Domain pass không có nghĩa endpoint Auth đã chạy được.
 
-Khi triển khai security, bổ sung kiểm tra: hash/verify round-trip, mật khẩu sai, salt khác nhau, hash malformed/parameters vượt bounds; JWT signature/issuer/audience/expiry và không lộ secret claims; refresh token randomness/encoding và hash deterministic. Test JWT dùng signing key fixture riêng, không đọc hoặc log user-secrets thật. Chốt policy và tương thích hash đã lưu với chủ module trước khi đổi format/tham số.
+Checks password hasher hiện có: round-trip Unicode, mật khẩu sai, salt khác nhau, hash bị sửa, Base64 lỗi, tham số không hỗ trợ, giới hạn input và culture. Chưa có fixture hash lịch sử độc lập để chứng minh tương thích ngoài định dạng/bộ tham số hiện tại. Khi triển khai token service, thêm checks signature/issuer/audience/expiry, secret claims, refresh randomness/encoding và hash deterministic. Test JWT dùng signing key fixture riêng, không đọc hoặc log user-secrets thật.
 
 ## 1. Use case và endpoint
 
-| Mã | Endpoint hiện có | Contract hiện có |
+Các route và DTO đã có; kết quả thành công trong bảng là mục tiêu sau khi hoàn thiện use case.
+
+| Mã | Endpoint hiện có | Contract mục tiêu |
 | --- | --- | --- |
 | AUTH-LOGIN | POST /api/v1/auth/login | LoginRequest → data: AuthSessionDto + cookie HttpOnly |
 | AUTH-SESSION | GET /api/v1/auth/session | data: CurrentSessionDto; cần xác thực |
@@ -49,7 +51,7 @@ Khi tích hợp FE: shared contract/API → entities user/adapter → features a
 | 3 | MODIFY | src/LegacyVault.Api/Program.cs |
 | 4 | CREATE/MODIFY | Bộ kiểm tra runnable cho validation/contract; đường dẫn chốt theo test tooling được phê duyệt |
 
-Sau scaffold use case, tiếp tục Domain và Infrastructure security bằng từng nhịp riêng: User, RefreshToken, password hasher và token service. Mỗi method nghiệp vụ để TODO 5 mục và lỗi chưa triển khai rõ ràng; không trả thành công giả. Giữ migration hiện có làm baseline, mọi thay đổi schema phát sinh phải qua migration mới. Không xóa database để dựng lại code.
+Ma trận trên ghi lại các nhịp scaffold ban đầu. User, RefreshToken và password hasher đã được triển khai theo hướng dẫn/review của chủ module; chỉ những method chưa triển khai mới giữ TODO blueprint và exception rõ ràng. Giữ migration hiện có làm baseline, mọi thay đổi schema phát sinh phải qua migration mới. Không xóa database để dựng lại code.
 
 ## 4. Micro-task
 
@@ -69,13 +71,18 @@ Sau scaffold use case, tiếp tục Domain và Infrastructure security bằng t�
 
 ## 6. Definition of Done
 
-Kiểm tra contract/validation bằng BCL, không cần SQL Server hoặc NuGet package mới:
+Kiểm tra contract/validation và Domain bằng BCL; kiểm tra hasher dùng package đã có. Cả hai bộ không cần SQL Server, signing key thật hoặc user-secrets:
 
 ```powershell
-dotnet run --project tests/LegacyVault.AuthChecks
+dotnet run --project tests/LegacyVault.AuthChecks --configuration Release
+dotnet run --file tests/security/PasswordHasherChecks.cs --configuration Release
 ```
 
-Đây là console check, không phải test project do `dotnet test` tự khám phá. Chạy lệnh trên riêng trong CI nếu muốn dùng làm gate. Exit code khác zero khi contract sai. Bao phủ 11 tình huống input và JSON whitelist/camelCase của hai response session. Chưa kiểm thử middleware, cookie, database, concurrency hoặc nghiệp vụ Auth; các hàm service vẫn là scaffold.
+Đây là console checks, không được `dotnet test` tự khám phá. Workflow `.github/workflows/backend-checks.yml` chạy khi push hoặc mở/cập nhật PR: cài SDK từ global.json, restore, build Release và chạy rõ cả hai bộ checks. Exit code khác zero làm job thất bại. Workflow không khởi động API hoặc seed database. Cần chọn job này làm required status check trong branch protection nếu muốn bắt buộc trước merge; file workflow không tự bật branch protection.
+
+AuthChecks bao phủ 11 tình huống input, JSON whitelist/camelCase của hai response session, lockout và refresh lifecycle. PasswordHasherChecks bao phủ hành vi mô tả ở phần Security. Chưa kiểm thử middleware, cookie, database, concurrency hoặc use case Auth; service vẫn là scaffold. Lần chạy đầu của file-based check cần restore project references.
+
+Nhịp đồng bộ tài liệu/CI sửa đúng ba file: `docs/AUTH_REBUILD.md` (MODIFY), `http/auth.http` (MODIFY), `.github/workflows/backend-checks.yml` (CREATE). Không thay đổi endpoint, DTO hoặc schema trong nhịp này.
 
 Nhịp 1: `dotnet build LegacyVault.sln --no-restore` pass. Validation kiểm tra thiếu/sai email, mật khẩu rỗng, chuỗi vượt giới hạn; mật khẩu ngắn vẫn được gửi để xác thực tài khoản hiện hữu. Compile pass chưa chứng minh nghiệp vụ đúng.
 
