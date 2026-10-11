@@ -13,10 +13,6 @@ public static class ApiServiceExtensions
     public const string FrontendCorsPolicy = "Frontend";
 
     private const string CorsOriginsSection = "Cors:AllowedOrigins";
-    private const string ValidationErrorCode = "VALIDATION_ERROR";
-    private const string ErrorCodeExtension = "code";
-    private const string ValidationErrorTitle = "Dữ liệu gửi lên không hợp lệ.";
-    private const string ProblemJsonContentType = "application/problem+json";
 
     /// <summary>Đăng ký controller, validation response, lỗi toàn cục, cookie writer và CORS.</summary>
     /// <param name="services">Service collection của ứng dụng.</param>
@@ -41,10 +37,13 @@ public static class ApiServiceExtensions
                     var problem = new ValidationProblemDetails(errors)
                     {
                         Status = StatusCodes.Status400BadRequest,
-                        Title = ValidationErrorTitle,
+                        Title = ApiProblemConstants.ValidationErrorTitle,
                     };
-                    problem.Extensions[ErrorCodeExtension] = ValidationErrorCode;
-                    return new BadRequestObjectResult(problem) { ContentTypes = { ProblemJsonContentType } };
+                    problem.Extensions[ApiProblemConstants.ErrorCodeExtension] = ApiProblemConstants.ValidationErrorCode;
+                    return new BadRequestObjectResult(problem)
+                    {
+                        ContentTypes = { ApiProblemConstants.ProblemJsonContentType }
+                    };
                 };
             });
 

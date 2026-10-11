@@ -12,6 +12,12 @@ public static class ApiProblemConstants
     /// <summary>Tên extension chứa mã lỗi nghiệp vụ.</summary>
     public const string ErrorCodeExtension = "code";
 
+    /// <summary>Mã lỗi khi request không vượt qua model validation.</summary>
+    public const string ValidationErrorCode = "VALIDATION_ERROR";
+
+    /// <summary>Thông báo chung cho response lỗi validation theo field.</summary>
+    public const string ValidationErrorTitle = "Dữ liệu gửi lên không hợp lệ.";
+
     /// <summary>Mã lỗi công khai cho exception không được xử lý ở use case.</summary>
     public const string InternalErrorCode = "INTERNAL_ERROR";
 
