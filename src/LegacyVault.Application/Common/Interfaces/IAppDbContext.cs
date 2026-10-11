@@ -1,5 +1,6 @@
 using LegacyVault.Domain.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 
 namespace LegacyVault.Application.Common.Interfaces;
 
@@ -19,6 +20,12 @@ public interface IAppDbContext
 
     /// <summary>Tập bản ghi refresh token; chỉ lưu hash của token gốc.</summary>
     DbSet<RefreshToken> RefreshTokens { get; }
+
+    /// <summary>Mở transaction cho nghiệp vụ ghi nhiều bảng.</summary>
+    /// <param name="cancellationToken">Token hủy thao tác mở transaction.</param>
+    /// <returns>Transaction cần await using; chỉ commit sau khi lưu thành công.</returns>
+    /// <remarks>Transaction chưa commit được rollback khi dispose; không tự giải quyết stale update.</remarks>
+    Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);
 
     /// <summary>Lưu các thay đổi đang được DbContext theo dõi vào database.</summary>
     /// <param name="cancellationToken">Token hủy thao tác lưu.</param>

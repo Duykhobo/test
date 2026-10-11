@@ -1,6 +1,7 @@
 using LegacyVault.Application.Common.Interfaces;
 using LegacyVault.Domain.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 
 namespace LegacyVault.Infrastructure.Persistence;
 
@@ -16,6 +17,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
 
     /// <inheritdoc />
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+
+    /// <inheritdoc />
+    public Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default)
+        => Database.BeginTransactionAsync(cancellationToken);
 
     /// <summary>Áp dụng các mapping entity được khai báo trong assembly Infrastructure.</summary>
     /// <param name="modelBuilder">Builder cấu hình model EF Core.</param>
