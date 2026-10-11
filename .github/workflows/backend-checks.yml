@@ -39,3 +39,6 @@ jobs:
 
       - name: Run password hasher checks
         run: dotnet run --file tests/security/PasswordHasherChecks.cs --configuration Release
+
+      - name: Run JWT options checks
+        run: dotnet run --file tests/security/JwtOptionsChecks.cs --configuration Release

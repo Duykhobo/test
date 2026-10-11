@@ -17,6 +17,10 @@ public static class DependencyInjection
 {
     private const string ConnectionStringName = "Default";
     private const string MissingConnectionStringMessage = "Thiếu ConnectionStrings:Default trong appsettings.";
+    private const string InvalidIssuerMessage = "Jwt:Issuer không được rỗng hoặc chỉ chứa khoảng trắng.";
+    private const string InvalidAudienceMessage = "Jwt:Audience không được rỗng hoặc chỉ chứa khoảng trắng.";
+    private const string InvalidAccessLifetimeMessage = "Jwt:AccessTokenMinutes phải lớn hơn zero.";
+    private const string InvalidRefreshLifetimeMessage = "Jwt:RefreshTokenDays phải dương và nằm trong phạm vi TimeSpan.";
     private static readonly string InvalidSigningKeyMessage = FormattableString.Invariant(
         $"Jwt:SigningKey phải dài ít nhất {JwtOptions.MinimumSigningKeyBytes} byte UTF-8. Đặt khóa ngẫu nhiên bằng user-secrets cho project src/LegacyVault.Api.");
 
@@ -59,8 +63,16 @@ public static class DependencyInjection
         services.AddOptions<JwtOptions>()
             .Bind(configuration.GetSection(JwtOptions.SectionName))
             .Validate(
-                o => Encoding.UTF8.GetByteCount(o.SigningKey) >= JwtOptions.MinimumSigningKeyBytes,
+                o => !string.IsNullOrWhiteSpace(o.SigningKey) &&
+                     Encoding.UTF8.GetByteCount(o.SigningKey) >= JwtOptions.MinimumSigningKeyBytes,
                 InvalidSigningKeyMessage)
+            .Validate(o => !string.IsNullOrWhiteSpace(o.Issuer), InvalidIssuerMessage)
+            .Validate(o => !string.IsNullOrWhiteSpace(o.Audience), InvalidAudienceMessage)
+            .Validate(o => o.AccessTokenMinutes > 0, InvalidAccessLifetimeMessage)
+            .Validate(
+                o => o.RefreshTokenDays > 0 &&
+                     o.RefreshTokenDays <= TimeSpan.MaxValue.Ticks / TimeSpan.TicksPerDay,
+                InvalidRefreshLifetimeMessage)
             .ValidateOnStart();
 
         services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer();
