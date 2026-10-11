@@ -1,10 +1,12 @@
+using LegacyVault.Domain.Identity;
+
 namespace LegacyVault.Application.Features.Identity;
 
 /// <summary>Giới hạn và thông báo validation cho hợp đồng Auth hiện tại.</summary>
 public static class AuthValidation
 {
     /// <summary>Độ dài email tối đa, khớp cột Users.Email.</summary>
-    public const int EmailMaxLength = 256;
+    public const int EmailMaxLength = UserLimits.Email;
 
     /// <summary>Giới hạn mật khẩu đầu vào; không áp policy đăng ký lên đăng nhập.</summary>
     public const int PasswordMaxLength = 128;

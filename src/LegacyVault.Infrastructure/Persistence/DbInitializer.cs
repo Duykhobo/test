@@ -11,8 +11,15 @@ namespace LegacyVault.Infrastructure.Persistence;
 /// </summary>
 public static class DbInitializer
 {
+    /// <summary>Mật khẩu fixture công khai, chỉ dùng cho tài khoản demo ở Development.</summary>
     public const string DemoPassword = "Password123!";
 
+    private const string DemoSeedCompletedMessage = "Đã tạo tài khoản demo cho môi trường Development.";
+
+    /// <summary>Áp migration và seed tài khoản demo nếu database chưa có user.</summary>
+    /// <param name="services">Service provider của ứng dụng Development.</param>
+    /// <returns>Task hoàn tất sau khi migration và seed thành công.</returns>
+    /// <remarks>Bên gọi phải giới hạn ở Development; lỗi database được truyền lên và không ghi mật khẩu vào log.</remarks>
     public static async Task InitializeDatabaseAsync(this IServiceProvider services)
     {
         // Service Scoped (DbContext) phải lấy trong một scope; lúc khởi động chưa có HTTP request nào.
@@ -39,6 +46,6 @@ public static class DbInitializer
             User.Create("inactive@legacyvault.local", "Tài Khoản Khóa", hash, UserRole.Owner, UserStatus.Inactive, now));
         await db.SaveChangesAsync();
 
-        logger.LogInformation("Đã tạo tài khoản demo, mật khẩu chung: {Password}", DemoPassword);
+        logger.LogInformation(DemoSeedCompletedMessage);
     }
 }
