@@ -48,3 +48,6 @@ jobs:
 
       - name: Run current session principal checks
         run: dotnet run --file tests/security/CurrentSessionChecks.cs --configuration Release
+
+      - name: Run user concurrency model checks
+        run: dotnet run --file tests/security/UserConcurrencyModelChecks.cs --configuration Release

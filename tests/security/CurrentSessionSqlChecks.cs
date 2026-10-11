@@ -62,7 +62,9 @@ internal static class CurrentSessionSqlChecks
                     throw new InvalidOperationException("Current session unexpectedly tracks entities.");
                 }
 
-                db.Users.Remove(user);
+                // Tải có tracking để EF giữ original row_version cho DELETE.
+                User trackedUser = await db.Users.SingleAsync(candidate => candidate.Id == user.Id);
+                db.Users.Remove(trackedUser);
                 await db.SaveChangesAsync();
                 db.ChangeTracker.Clear();
                 var deleted = await service.GetCurrentUserAsync(CancellationToken.None);
