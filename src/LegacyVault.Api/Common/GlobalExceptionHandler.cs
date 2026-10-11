@@ -10,14 +10,21 @@ namespace LegacyVault.Api.Common;
 /// Ghi log đầy đủ ở server, nhưng chỉ trả cho FE thông báo chung chung + traceId.
 /// Không bao giờ gửi stack trace ra ngoài: nó lộ cấu trúc code cho kẻ tấn công.
 /// </remarks>
+/// <param name="logger">Logger ghi exception ở server.</param>
+/// <param name="problemDetailsService">Dịch vụ ghi response ProblemDetails.</param>
 public sealed class GlobalExceptionHandler(
     ILogger<GlobalExceptionHandler> logger,
     IProblemDetailsService problemDetailsService) : IExceptionHandler
 {
+    /// <summary>Ghi log exception và thử trả response lỗi server với thông báo an toàn.</summary>
+    /// <param name="httpContext">HTTP context của request gặp lỗi.</param>
+    /// <param name="exception">Exception cần ghi vào log server, không serialize ra response.</param>
+    /// <param name="cancellationToken">Token hủy do exception handler middleware cung cấp.</param>
+    /// <returns>True nếu dịch vụ ProblemDetails đã ghi response; false để middleware xử lý tiếp.</returns>
     public async ValueTask<bool> TryHandleAsync(
         HttpContext httpContext, Exception exception, CancellationToken cancellationToken)
     {
-        logger.LogError(exception, "Lỗi không xử lý được tại {Path}", httpContext.Request.Path);
+        logger.LogError(exception, ApiProblemConstants.UnhandledExceptionLogMessage, httpContext.Request.Path);
 
         httpContext.Response.StatusCode = StatusCodes.Status500InternalServerError;
 
@@ -28,8 +35,8 @@ public sealed class GlobalExceptionHandler(
             ProblemDetails = new ProblemDetails
             {
                 Status = StatusCodes.Status500InternalServerError,
-                Title = "Hệ thống đang gặp sự cố. Vui lòng thử lại sau.",
-                Extensions = { ["code"] = "INTERNAL_ERROR" },
+                Title = ApiProblemConstants.InternalErrorTitle,
+                Extensions = { [ApiProblemConstants.ErrorCodeExtension] = ApiProblemConstants.InternalErrorCode },
             },
         });
     }

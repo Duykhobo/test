@@ -11,15 +11,22 @@ namespace LegacyVault.Api.Common;
 /// Controller nên MỎNG: nhận request → gọi 1 method service → đổi kết quả thành HTTP.
 /// </remarks>
 [ApiController]
-[Produces("application/json")]
+[Produces(ApiProblemConstants.JsonContentType)]
 public abstract class ApiControllerBase : ControllerBase
 {
+    /// <summary>Trả HTTP 200 với dữ liệu nằm trong envelope ApiResponse.</summary>
+    /// <typeparam name="T">Kiểu DTO công khai, không chứa token hoặc hash bí mật.</typeparam>
+    /// <param name="data">Dữ liệu response đã được use case cho phép công khai.</param>
+    /// <returns>HTTP 200 với body chứa field data.</returns>
     protected IActionResult OkData<T>(T data) => Ok(new ApiResponse<T>(data));
 
     /// <summary>
     /// Error → ProblemDetails, ví dụ:
-    /// { "status": 401, "title": "Email hoặc mật khẩu chưa đúng.", "code": "INVALID_CREDENTIALS", "attemptsRemaining": 3 }
+    /// { "status": 401, "title": "Email hoặc mật khẩu chưa đúng.", "code": "INVALID_CREDENTIALS" }
     /// </summary>
+    /// <param name="error">Lỗi nghiệp vụ với message và metadata an toàn để công khai.</param>
+    /// <returns>HTTP status tương ứng ErrorType và body ProblemDetails.</returns>
+    /// <remarks>Use case chịu trách nhiệm không đưa secret hoặc thông tin giúp dò tài khoản vào metadata.</remarks>
     protected IActionResult Fail(Error error)
     {
         var status = error.Type switch
@@ -35,7 +42,7 @@ public abstract class ApiControllerBase : ControllerBase
 
         // Factory của ASP.NET tự thêm "type" và "traceId" (để tra log khi có sự cố).
         var problem = ProblemDetailsFactory.CreateProblemDetails(HttpContext, status, title: error.Message);
-        problem.Extensions["code"] = error.Code;
+        problem.Extensions[ApiProblemConstants.ErrorCodeExtension] = error.Code;
 
         if (error.Metadata is not null)
         {
@@ -48,7 +55,7 @@ public abstract class ApiControllerBase : ControllerBase
         return new ObjectResult(problem)
         {
             StatusCode = status,
-            ContentTypes = { "application/problem+json" },
+            ContentTypes = { ApiProblemConstants.ProblemJsonContentType },
         };
     }
 }
