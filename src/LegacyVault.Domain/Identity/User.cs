@@ -111,10 +111,9 @@ public sealed class User : Entity
         return normalizedEmail;
     }
 
-    /// <summary>Khung kiểm tra trạng thái khóa tại thời điểm cho trước.</summary>
-    /// <param name="now">Thời điểm UTC cần kiểm tra.</param>
-    /// <returns>True nếu tài khoản vẫn bị khóa.</returns>
-    /// <exception cref="NotImplementedException">Chưa triển khai.</exception>
+    /// <summary>Kiểm tra tài khoản còn bị khóa tại thời điểm cho trước.</summary>
+    /// <param name="now">Thời điểm kiểm tra từ TimeProvider.</param>
+    /// <returns>True nếu thời hạn khóa chưa kết thúc.</returns>
     public bool IsLockedOut(DateTimeOffset now)
     {
         // TODO: [BẢN THIẾT KẾ THỰC THI - DEVELOPER BLUEPRINT]
@@ -124,13 +123,13 @@ public sealed class User : Entity
         // 4. [HÀM / THƯ VIỆN]: DateTimeOffset, nullable pattern matching.
         // 5. [ĐIỀU KIỆN BIÊN & NGOẠI LỆ]: Đúng thời điểm hết khóa phải mở;
         //    không gọi đồng hồ hệ thống trực tiếp hoặc tự kéo dài khóa khi đọc.
-        throw new NotImplementedException(nameof(IsLockedOut));
+        return LockoutEndsAt is { } end && end > now;
     }
 
-    /// <summary>Khung tính số giây chờ còn lại.</summary>
-    /// <param name="now">Thời điểm UTC cần kiểm tra.</param>
-    /// <returns>Số giây không âm, zero khi không khóa.</returns>
-    /// <exception cref="NotImplementedException">Chưa triển khai.</exception>
+    /// <summary>Tính số giây chờ còn lại, làm tròn lên.</summary>
+    /// <param name="now">Thời điểm kiểm tra từ TimeProvider.</param>
+    /// <returns>Zero nếu không khóa; số giây còn lại nếu đang khóa.</returns>
+    /// <exception cref="OverflowException">Thời gian chờ vượt phạm vi int.</exception>
     public int LockoutRemainingSeconds(DateTimeOffset now)
     {
         // TODO: [BẢN THIẾT KẾ THỰC THI - DEVELOPER BLUEPRINT]
@@ -140,13 +139,20 @@ public sealed class User : Entity
         // 4. [HÀM / THƯ VIỆN]: IsLockedOut, TimeSpan.TotalSeconds, Math.Ceiling.
         // 5. [ĐIỀU KIỆN BIÊN & NGOẠI LỆ]: Null, hết hạn, phần lẻ và tràn int;
         //    không công khai dữ liệu này cho người chưa chứng minh thông tin xác thực.
-        throw new NotImplementedException(nameof(LockoutRemainingSeconds));
+        if(LockoutEndsAt is not { } end || end <= now)
+        {
+            return 0;
+        }
+        double remainingSeconds = (end - now).TotalSeconds;
+        return checked((int)Math.Ceiling(remainingSeconds));
     }
 
-    /// <summary>Khung ghi nhận xác thực thất bại.</summary>
-    /// <param name="now">Thời điểm thất bại UTC.</param>
-    /// <returns>Số lần thử còn lại theo policy.</returns>
-    /// <exception cref="NotImplementedException">Chưa triển khai.</exception>
+    /// <summary>Ghi nhận lần đăng nhập sai và khóa khi đạt ngưỡng.</summary>
+    /// <param name="now">Thời điểm đăng nhập sai từ TimeProvider.</param>
+    /// <returns>Số lượt còn lại; zero nếu đang khóa hoặc vừa đạt ngưỡng.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thời điểm kết thúc khóa vượt phạm vi DateTimeOffset.
+    /// </exception>
     public int RegisterFailedLogin(DateTimeOffset now)
     {
         // TODO: [BẢN THIẾT KẾ THỰC THI - DEVELOPER BLUEPRINT]
@@ -157,12 +163,39 @@ public sealed class User : Entity
         // 4. [HÀM / THƯ VIỆN]: IsLockedOut, MaxFailedLoginAttempts, LockoutDuration, DateTimeOffset.Add.
         // 5. [ĐIỀU KIỆN BIÊN & NGOẠI LỆ]: Đã khóa, đúng hạn mở, vượt ngưỡng/tràn;
         //    method trong RAM không ngăn lost update. Persistence phải bảo vệ concurrency khi lưu.
-        throw new NotImplementedException(nameof(RegisterFailedLogin));
+        if (IsLockedOut(now))
+        {
+            return 0;
+        }
+        if (LockoutEndsAt is { } end && end <= now)
+        {
+            FailedLoginCount = 0;
+            LockoutEndsAt = null;
+        }
+        if (FailedLoginCount >= MaxFailedLoginAttempts - 1)
+        {
+            DateTimeOffset lockoutEnd = now.Add(LockoutDuration);
+
+            FailedLoginCount = MaxFailedLoginAttempts;
+            LockoutEndsAt = lockoutEnd;
+            UpdatedAt = now;
+
+            return 0;
+        }
+
+        FailedLoginCount++;
+        UpdatedAt = now;
+
+        return MaxFailedLoginAttempts - FailedLoginCount;
+
     }
 
-    /// <summary>Khung ghi nhận đăng nhập thành công sau khi service hoàn tất mọi kiểm tra.</summary>
-    /// <param name="now">Thời điểm đăng nhập UTC.</param>
-    /// <exception cref="NotImplementedException">Chưa triển khai.</exception>
+    /// <summary>Reset trạng thái thất bại sau khi use case cho phép đăng nhập.</summary>
+    /// <param name="now">Thời điểm đăng nhập thành công từ TimeProvider.</param>
+    /// <remarks>
+    /// Service phải hoàn tất kiểm tra mật khẩu, trạng thái, lockout và challenge
+    /// trước khi gọi hàm này.
+    /// </remarks>
     public void RegisterSuccessfulLogin(DateTimeOffset now)
     {
         // TODO: [BẢN THIẾT KẾ THỰC THI - DEVELOPER BLUEPRINT]
@@ -173,6 +206,9 @@ public sealed class User : Entity
         // 4. [HÀM / THƯ VIỆN]: Các property entity; transaction của use case khi lưu.
         // 5. [ĐIỀU KIỆN BIÊN & NGOẠI LỆ]: Login đồng thời với thất bại/khóa;
         //    dùng concurrency control ở DB, không gọi khi tài khoản chưa đủ điều kiện cấp phiên.
-        throw new NotImplementedException(nameof(RegisterSuccessfulLogin));
+        FailedLoginCount = 0;
+        LockoutEndsAt = null;
+        LastLoginAt = now;
+        UpdatedAt = now;
     }
 }

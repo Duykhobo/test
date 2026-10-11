@@ -32,6 +32,8 @@ internal static class Program
         CheckPublicJson(new AuthSessionDto(user.Id, 900, user), ["userId", "expiresIn", "user"]);
         CheckPublicJson(new CurrentSessionDto(user), ["user"]);
         Console.WriteLine("PASS: 11 validation cases and 2 public response contracts.");
+
+        UserLockoutChecks.Run();
     }
 
     /// <summary>Kiểm tra validation và tên field lỗi đúng contract DataAnnotations.</summary>
