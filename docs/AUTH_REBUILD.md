@@ -2,6 +2,14 @@
 
 AI dựng contract/scaffold và TODO blueprint; developer viết nghiệp vụ. Mỗi nhịp tối đa 2–3 file, build rồi dừng để developer commit. Jira chưa được cung cấp: LV-XXX là placeholder, không phải mã issue thực.
 
+## Trạng thái Domain scaffold
+
+User và RefreshToken giữ nguyên property/schema, nhưng factory và method nghiệp vụ hiện ném NotImplementedException kèm tên method. EF Core vẫn materialize được bản ghi đã lưu bằng constructor private; không cần migration mới cho nhịp này. Policy 5 lần sai/15 phút vẫn là giá trị mẫu cũ, chủ module quyết định trước khi hoàn thiện.
+
+DbInitializer vẫn gọi User.Create khi database chưa có user. Vì vậy chạy trên database mới/rỗng sẽ dừng ở bước seed cho đến khi developer hoàn thiện factory; không bỏ qua lỗi để giả báo khởi tạo thành công. Database hiện có không bị xóa. Bộ AuthChecks chỉ xác minh DTO/validation, không chứng minh các method Domain đã hoạt động.
+
+Thứ tự developer đề xuất: User.NormalizeEmail/Create → các method lockout → RefreshToken factory/lifecycle → Infrastructure security → AuthService → kiểm tra HTTP và concurrency. Thêm kiểm tra hành vi Domain khi triển khai; không viết test coi NotImplementedException là nghiệp vụ đúng.
+
 ## 1. Use case và endpoint
 
 | Mã | Endpoint hiện có | Contract hiện có |
