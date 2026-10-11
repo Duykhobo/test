@@ -53,6 +53,14 @@ Sau scaffold use case, tiếp tục Domain và Infrastructure security bằng t�
 
 ## 6. Definition of Done
 
+Kiểm tra contract/validation bằng BCL, không cần SQL Server hoặc NuGet package mới:
+
+```powershell
+dotnet run --project tests/LegacyVault.AuthChecks
+```
+
+Đây là console check, không phải test project do `dotnet test` tự khám phá. Chạy lệnh trên riêng trong CI nếu muốn dùng làm gate. Exit code khác zero khi contract sai. Bao phủ 11 tình huống input và JSON whitelist/camelCase của hai response session. Chưa kiểm thử middleware, cookie, database, concurrency hoặc nghiệp vụ Auth; các hàm service vẫn là scaffold.
+
 Nhịp 1: `dotnet build LegacyVault.sln --no-restore` pass. Validation kiểm tra thiếu/sai email, mật khẩu rỗng, chuỗi vượt giới hạn; mật khẩu ngắn vẫn được gửi để xác thực tài khoản hiện hữu. Compile pass chưa chứng minh nghiệp vụ đúng.
 
 Sau khi developer hoàn thiện: chạy `dotnet run --project src/LegacyVault.Api`; dùng http/auth.http để kiểm tra anonymous session 401 → login 200 → session 200 → refresh 200 → logout 204 → session 401. Thử payload sai 400, inactive 403 và policy lockout đã chốt. Kiểm tra hai refresh cùng token đồng thời chỉ có một lần tiêu thụ thành công; thử đăng nhập sai đồng thời không mất bộ đếm; token hết hạn/revoke không được logout mọi thiết bị. Kiểm tra rate limit 429 và Retry-After theo policy.
