@@ -4,10 +4,12 @@ namespace LegacyVault.Domain.Common;
 /// Lớp cha của mọi entity. Mỗi entity có một Id kiểu Guid.
 /// </summary>
 /// <remarks>
-/// Guid.CreateVersion7() (từ .NET 9) sinh Guid có thành phần thời gian ở đầu,
-/// nên các bản ghi mới chèn vào cuối index → SQL Server ít bị phân mảnh hơn Guid.NewGuid().
+/// ID được tạo bằng Guid.CreateVersion7(), có thành phần thời gian.
+/// Không suy ra thứ tự clustered index của SQL Server chỉ từ phiên bản Guid;
+/// hiệu quả index cần được đo theo provider và cấu hình database thực tế.
 /// </remarks>
 public abstract class Entity
 {
+    /// <summary>Định danh entity; được tạo khi khởi tạo và có thể được EF khôi phục từ database.</summary>
     public Guid Id { get; protected set; } = Guid.CreateVersion7();
 }
