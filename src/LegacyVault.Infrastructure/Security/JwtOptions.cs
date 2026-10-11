@@ -5,9 +5,19 @@ namespace LegacyVault.Infrastructure.Security;
 /// </summary>
 public sealed class JwtOptions
 {
+    /// <summary>Tên section chứa cấu hình JWT.</summary>
     public const string SectionName = "Jwt";
 
+    /// <summary>Số byte UTF-8 tối thiểu của khóa ký đối xứng theo policy hiện tại.</summary>
+    public const int MinimumSigningKeyBytes = 32;
+
+    /// <summary>Dung sai thời gian dùng khi kiểm tra hạn JWT.</summary>
+    public static readonly TimeSpan ValidationClockSkew = TimeSpan.FromSeconds(30);
+
+    /// <summary>Issuer được signer phát hành và JwtBearer chấp nhận.</summary>
     public string Issuer { get; init; } = "legacyvault-api";
+
+    /// <summary>Audience được signer phát hành và JwtBearer chấp nhận.</summary>
     public string Audience { get; init; } = "legacyvault-web";
 
     /// <summary>
@@ -16,6 +26,9 @@ public sealed class JwtOptions
     /// </summary>
     public string SigningKey { get; init; } = string.Empty;
 
+    /// <summary>Thời gian sống access token, tính bằng phút.</summary>
     public int AccessTokenMinutes { get; init; } = 15;
+
+    /// <summary>Thời gian sống refresh token, tính bằng ngày.</summary>
     public int RefreshTokenDays { get; init; } = 7;
 }
