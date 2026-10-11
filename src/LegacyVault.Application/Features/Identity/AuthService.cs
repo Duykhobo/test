@@ -35,11 +35,20 @@ public interface IAuthService
 
 /// <summary>Khung Auth cho developer tự hoàn thiện nghiệp vụ trên .NET 10.</summary>
 /// <remarks>
-/// Dependency được nhận qua constructor; scaffold chưa truy cập database
-/// và chưa cấp hoặc thu hồi token.
+/// Đọc session và nhánh đăng nhập sai đã truy cập database.
+/// Cấp phiên, refresh và logout chưa được triển khai.
 /// </remarks>
 public sealed class AuthService : IAuthService
 {
+    /// <summary>
+    /// Hash giả cho email không tồn tại; không thuộc tài khoản thật.
+    /// Phải cập nhật khi thay đổi bộ tham số của password hasher.
+    /// </summary>
+    private const string DummyPasswordHash =
+        "argon2id$m=19456,t=2,p=1$Gf9inP6XtC2sfIYwgNyTzQ==$s+HO+WC+25wQwHWuJL0jQbOXq7y+pSyQ8K/2RmCfcoc=";
+
+    /// <summary>Tổng số lần thử lưu bộ đếm, gồm lần đầu và các lần retry.</summary>
+    private const int MaxFailedLoginSaveAttempts = 3;
     private readonly IAppDbContext _db;
     private readonly IPasswordHasher _passwordHasher;
     private readonly ITokenService _tokenService;
@@ -70,26 +79,101 @@ public sealed class AuthService : IAuthService
     }
 
     /// <inheritdoc />
-    /// <exception cref="NotImplementedException">Developer chưa triển khai login.</exception>
-    public Task<Result<AuthResult>> LoginAsync(LoginRequest request, CancellationToken ct)
+    /// <exception cref="ArgumentNullException">Request là null.</exception>
+    /// <exception cref="OperationCanceledException">Thao tác bị hủy.</exception>
+    /// <exception cref="DbUpdateConcurrencyException">Hết lượt retry hoặc conflict ngoài user hiện tại.</exception>
+    /// <exception cref="NotImplementedException">Nhánh cấp phiên chưa triển khai.</exception>
+    public async Task<Result<AuthResult>> LoginAsync(LoginRequest request, CancellationToken ct)
     {
+        ArgumentNullException.ThrowIfNull(request);
+        ct.ThrowIfCancellationRequested();
+        string email = User.NormalizeEmail(request.Email);
+        User? user = await _db.Users.SingleOrDefaultAsync(
+            candidate => candidate.Email == email,
+            ct);
+        string hashToVerify = user?.PasswordHash ?? DummyPasswordHash;
+
+        bool passwordMatches = _passwordHasher.Verify(
+            request.Password,
+            hashToVerify);
+
+        ct.ThrowIfCancellationRequested();
+        if (user is null)
+        {
+            return Result<AuthResult>.Failure(
+                AuthErrors.InvalidCredentials());
+        }
+        DateTimeOffset now = _timeProvider.GetUtcNow();
+        if (!passwordMatches)
+        {
+            string verifiedPasswordHash = user.PasswordHash;
+            for (int attempt = 1; attempt <= MaxFailedLoginSaveAttempts; attempt++)
+            {
+                ct.ThrowIfCancellationRequested();
+                now = _timeProvider.GetUtcNow();
+                if (user.IsLockedOut(now))
+                {
+                    return Result<AuthResult>.Failure(
+                        AuthErrors.InvalidCredentials());
+                }
+                try
+                {
+                    user.RegisterFailedLogin(now);
+
+                    await _db.SaveChangesAsync(ct);
+
+                    return Result<AuthResult>.Failure(
+                        AuthErrors.InvalidCredentials());
+                }
+                catch (DbUpdateConcurrencyException exception)
+                    when (attempt < MaxFailedLoginSaveAttempts)
+                {
+                    foreach (var entry in exception.Entries)
+                    {
+                        if (!ReferenceEquals(entry.Entity, user))
+                        {
+                            throw;
+                        }
+
+                        await entry.ReloadAsync(ct);
+
+                        if (entry.State == EntityState.Detached)
+                        {
+                            return Result<AuthResult>.Failure(
+                                AuthErrors.InvalidCredentials());
+                        }
+                    }
+
+                    if (user.PasswordHash != verifiedPasswordHash)
+                    {
+                        return Result<AuthResult>.Failure(
+                            AuthErrors.InvalidCredentials());
+                    }
+                }
+            }
+        }
+        if (user.IsLockedOut(now))
+        {
+            return Result<AuthResult>.Failure(
+                AuthErrors.AccountLocked(
+                    user.LockoutRemainingSeconds(now)));
+        }
+
+        if (user.Status != UserStatus.Active)
+        {
+            return Result<AuthResult>.Failure(
+                AuthErrors.AccountNotActive);
+        }
         // TODO: [BẢN THIẾT KẾ THỰC THI - DEVELOPER BLUEPRINT]
-        // 1. [MỤC TIÊU & NGHIỆP VỤ]: Xác thực và mở phiên; không tiết lộ email tồn tại.
-        // 2. [INPUT & OUTPUT]: LoginRequest + ct -> Result<AuthResult>; không serialize AuthResult trực tiếp.
-        // 3. [CÁC BƯỚC TUẦN TỰ]:
-        //    - Chuẩn hóa email, tải user; dùng dummy hash khởi tạo an toàn nếu user không tồn tại.
-        //    - Kiểm tra mật khẩu và policy lockout; chọn phản hồi công khai đồng nhất cho email sai/mật khẩu sai.
-        //    - Cập nhật số lần sai nguyên tử ở DB hoặc dùng concurrency token + retry có giới hạn.
-        //    - Chỉ sau khi chứng minh mật khẩu đúng, kiểm tra trạng thái/quyền và yêu cầu challenge nếu policy cần.
-        //    - Reset bộ đếm, tạo access token và refresh family; chỉ lưu refresh hash vào DB.
-        //    - Lưu user + token nguyên khối; chỉ trả AuthResult sau khi commit thành công.
-        // 4. [HÀM / THƯ VIỆN]: User.NormalizeEmail, IPasswordHasher.Verify, ITokenService,
-        //    IAppDbContext, EF Core async + ct, TimeProvider.GetUtcNow, AuthErrors, UserDto.From.
-        //    Concurrency/transaction cần mở rộng contract persistence và migration trước nếu schema cần đổi.
-        // 5. [ĐIỀU KIỆN BIÊN & NGOẠI LỆ]: Email rỗng/sai, user thiếu/inactive/khóa; không trim mật khẩu.
-        //    Không trả attemptsRemaining chỉ cho email thật. Không cấp quyền Admin trước challenge bắt buộc.
-        //    Rate limit phải chạy trước băm ở tầng HTTP. Hủy request phải propagate;
-        //    lỗi DB/concurrency không được biến thành login thành công. Không log mật khẩu/token.
+        // 1. [MỤC TIÊU & NGHIỆP VỤ]: Cấp phiên sau khi đủ điều kiện xác thực/challenge.
+        // 2. [INPUT & OUTPUT]: User + RememberMe + ct -> AuthResult sau commit.
+        // 3. [CÁC BƯỚC TUẦN TỰ]: Hoàn thành challenge theo policy; mở transaction;
+        //    cập nhật login thành công, tạo refresh family và lưu hash; commit rồi trả kết quả.
+        //    Nếu user thay đổi đồng thời, rollback và đánh giá lại mật khẩu/status/quyền/lockout.
+        // 4. [HÀM / THƯ VIỆN]: BeginTransactionAsync, RegisterSuccessfulLogin,
+        //    ITokenService, RefreshToken.Create, SaveChangesAsync, CommitAsync, UserDto.From.
+        // 5. [ĐIỀU KIỆN BIÊN & NGOẠI LỆ]: Không trả token nếu commit thất bại;
+        //    không retry mù, không log secret; propagate lỗi DB và cancellation.
         throw new NotImplementedException(AuthErrors.ScaffoldNotImplemented);
     }
 

@@ -101,3 +101,14 @@ dotnet run --file tests/security/CurrentSessionSqlChecks.cs --configuration Rele
 ```
 
 Check dùng signing key fixture, không đọc user-secrets. Các user fixture có email ngẫu nhiên được thêm/xóa trong transaction và luôn rollback khi kết thúc, kể cả khi assertion thất bại. File tắt PublishAot để EF Core dựng model ở runtime. Check này chưa nằm trong CI vì workflow hiện chưa cấp SQL Server; các checks principal không cần SQL vẫn chạy trong CI. Đây là kiểm tra use case/persistence, chưa kiểm tra HTTP middleware hoặc cookie.
+## Checkpoint nhánh đăng nhập sai
+
+LoginAsync đã chuẩn hóa email, verify bằng hash thật/dummy hash và xử lý nhánh mật khẩu sai: ghi bộ đếm, giữ khóa hiện tại, retry tối đa ba lần ghi khi conflict. Sau reload, user đã xóa hoặc đổi password hash bị từ chối; conflict cuối cùng và cancellation được truyền lên. Nhánh cấp phiên còn TODO; refresh/logout chưa triển khai.
+
+LoginFailureSqlChecks chạy implementation AuthService thật trên database development đã áp dụng migration row_version:
+
+```powershell
+dotnet run --file tests/security/LoginFailureSqlChecks.cs --configuration Release
+```
+
+Cần đặt LEGACYVAULT_TEST_CONNECTION_STRING trước khi chạy. Check bao phủ email không tồn tại, bộ đếm lưu ở DB, khóa không bị kéo dài, một stale-version dẫn đến reload/retry, giới hạn ba lần ghi và cancellation. Interceptor chỉ thay original rowversion để tạo xung đột SQL có kiểm soát; đây không phải kiểm thử tải hoặc hai request HTTP chạy song song. Fixture luôn rollback; không đọc signing key thật. Chưa bao phủ user bị xóa hoặc password đổi đúng lúc conflict. Check SQL chưa nằm trong CI vì workflow chưa cấp SQL Server. Việc email không tồn tại dùng dummy hash không bảo đảm mọi nhánh có cùng thời gian phản hồi; nhánh sai/hợp lệ còn chưa đồng nhất đầy đủ trong giai đoạn scaffold.
