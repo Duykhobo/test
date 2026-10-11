@@ -10,6 +10,14 @@ DbInitializer vẫn gọi User.Create khi database chưa có user. Vì vậy ch�
 
 Thứ tự developer đề xuất: User.NormalizeEmail/Create → các method lockout → RefreshToken factory/lifecycle → Infrastructure security → AuthService → kiểm tra HTTP và concurrency. Thêm kiểm tra hành vi Domain khi triển khai; không viết test coi NotImplementedException là nghiệp vụ đúng.
 
+## Trạng thái Security scaffold
+
+Argon2PasswordHasher.Hash/Verify và JwtTokenService.CreateAccessToken/CreateRefreshToken/HashRefreshToken/RefreshTokenLifetime hiện là TODO blueprint và ném NotImplementedException. Helper CreateSigningKey được giữ nguyên vì JwtBearer dùng để cấu hình validator; helper này chỉ bọc khóa đã cấu hình, không sinh hoặc ký token. Không thêm dependencies. Các constructor options/TimeProvider của token service cần được developer khôi phục khi triển khai theo blueprint.
+
+DbInitializer trên database rỗng gọi Hash trước khi gọi User.Create, nên hiện sẽ dừng ngay tại password hasher chưa triển khai. Database hiện hữu không bị sửa/xóa bởi nhịp scaffold. Không coi build/DTO checks pass là bằng chứng mật mã hoặc xác thực đã hoạt động.
+
+Khi triển khai security, bổ sung kiểm tra: hash/verify round-trip, mật khẩu sai, salt khác nhau, hash malformed/parameters vượt bounds; JWT signature/issuer/audience/expiry và không lộ secret claims; refresh token randomness/encoding và hash deterministic. Test JWT dùng signing key fixture riêng, không đọc hoặc log user-secrets thật. Chốt policy và tương thích hash đã lưu với chủ module trước khi đổi format/tham số.
+
 ## 1. Use case và endpoint
 
 | Mã | Endpoint hiện có | Contract hiện có |
