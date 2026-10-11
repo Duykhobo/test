@@ -14,7 +14,7 @@ Thứ tự còn lại: AuthService và persistence concurrency/transaction → H
 
 Argon2PasswordHasher.Hash/Verify đã triển khai bằng package có sẵn, giữ định dạng hash cũ và whitelist bộ tham số hiện tại. Tham số serialize và độ dài Base64 được tính từ một nguồn cấu hình. Khi nâng tham số phải hỗ trợ hash cũ trước khi triển khai. PasswordHasherChecks chạy riêng để kiểm tra hành vi này.
 
-JwtTokenService đã triển khai ký HS256, claims sub/jti/role, expiry chuẩn hóa đến giây và refresh token CSPRNG 64 byte kèm hash SHA-256. JwtTokenServiceChecks đã chạy pass và được thêm vào workflow; không đọc signing key thật. AuthService đã nhận dependency qua constructor; bốn use case vẫn là scaffold. Bước tiếp theo developer triển khai GetCurrentUserAsync: kiểm tra principal, tải user read-only, kiểm tra Active và map UserDto. Seed thành công và checks Domain/security pass chưa chứng minh endpoint Auth hoạt động.
+JwtTokenService đã triển khai ký HS256, claims sub/jti/role, expiry chuẩn hóa đến giây và refresh token CSPRNG 64 byte kèm hash SHA-256. JwtTokenServiceChecks đã chạy pass và được thêm vào workflow; không đọc signing key thật. AuthService đã nhận dependency qua constructor và triển khai GetCurrentUserAsync: kiểm tra principal, tải user read-only, kiểm tra Active và map UserDto. Login, refresh và logout vẫn là scaffold. CurrentSessionChecks kiểm tra guard không cần SQL; CurrentSessionSqlChecks đã pass trên SQL Server development local cho Active/Pending/Inactive, user đã xóa, DTO, no-tracking và cancellation. Fixture được rollback trong transaction. Bước tiếp theo là concurrency/transaction của persistence trước khi triển khai login và rotation. Seed thành công và checks Domain/security pass chưa chứng minh endpoint Auth hoạt động.
 
 Checks password hasher hiện có: round-trip Unicode, mật khẩu sai, salt khác nhau, hash bị sửa, Base64 lỗi, tham số không hỗ trợ, giới hạn input và culture. Chưa có fixture hash lịch sử độc lập để chứng minh tương thích ngoài định dạng/bộ tham số hiện tại. Khi triển khai token service, thêm checks signature/issuer/audience/expiry, secret claims, refresh randomness/encoding và hash deterministic. Test JWT dùng signing key fixture riêng, không đọc hoặc log user-secrets thật.
 
@@ -91,3 +91,13 @@ Nhịp 1: `dotnet build LegacyVault.sln --no-restore` pass. Validation kiểm tr
 Sau khi developer hoàn thiện: chạy `dotnet run --project src/LegacyVault.Api`; dùng http/auth.http để kiểm tra anonymous session 401 → login 200 → session 200 → refresh 200 → logout 204 → session 401. Thử payload sai 400, inactive 403 và policy lockout đã chốt. Kiểm tra hai refresh cùng token đồng thời chỉ có một lần tiêu thụ thành công; thử đăng nhập sai đồng thời không mất bộ đếm; token hết hạn/revoke không được logout mọi thiết bị. Kiểm tra rate limit 429 và Retry-After theo policy.
 
 Manual UI khi đã tích hợp FE: đăng nhập → F5 khôi phục phiên → hết access token và refresh → đăng xuất; lỗi form hiển thị inline, lỗi API có thông báo, không tạo vòng lặp refresh. Trong giai đoạn scaffold, endpoint chưa triển khai phải được nhận diện rõ và chưa đủ điều kiện nghiệm thu chức năng.
+
+## Integration checks session trên SQL Server development
+
+Database phải có migration hiện tại. Chỉ chạy trên database development; không tự tạo/xóa database hoặc chạy migration trong check. Đặt biến LEGACYVAULT_TEST_CONNECTION_STRING bằng connection string development rồi chạy:
+
+```powershell
+dotnet run --file tests/security/CurrentSessionSqlChecks.cs --configuration Release
+```
+
+Check dùng signing key fixture, không đọc user-secrets. Các user fixture có email ngẫu nhiên được thêm/xóa trong transaction và luôn rollback khi kết thúc, kể cả khi assertion thất bại. File tắt PublishAot để EF Core dựng model ở runtime. Check này chưa nằm trong CI vì workflow hiện chưa cấp SQL Server; các checks principal không cần SQL vẫn chạy trong CI. Đây là kiểm tra use case/persistence, chưa kiểm tra HTTP middleware hoặc cookie.
