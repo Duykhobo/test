@@ -37,6 +37,14 @@ public sealed class LogoutRequest
 }
 
 /// <summary>Thông tin người dùng công khai; không chứa mật khẩu hoặc token.</summary>
+/// <param name="Id">Định danh tài khoản.</param>
+/// <param name="Email">Email đã chuẩn hóa.</param>
+/// <param name="FullName">Tên hiển thị.</param>
+/// <param name="Phone">Số điện thoại tùy chọn.</param>
+/// <param name="Role">Vai trò do server quyết định, dạng chữ hoa.</param>
+/// <param name="Status">Trạng thái tài khoản dạng chữ hoa.</param>
+/// <param name="CreatedAt">Thời điểm tạo tài khoản.</param>
+/// <param name="UpdatedAt">Thời điểm cập nhật gần nhất hoặc null.</param>
 public sealed record UserDto(
     Guid Id,
     string Email,
@@ -63,18 +71,28 @@ public sealed record UserDto(
 
 /// <summary>Body trả về khi đăng nhập hoặc refresh thành công.</summary>
 /// <remarks>
-/// Token KHÔNG nằm trong body: chúng được đặt vào cookie HttpOnly,
-/// JavaScript không đọc được → mã độc XSS không lấy cắp được token.
+/// Token không nằm trong body; controller ghi chúng vào cookie HttpOnly.
+/// HttpOnly hạn chế JavaScript đọc cookie, không ngăn XSS gửi request bằng phiên hiện tại.
 /// </remarks>
+/// <param name="UserId">Định danh tài khoản của phiên.</param>
+/// <param name="ExpiresIn">Thời gian sống access token, tính bằng giây tại thời điểm cấp.</param>
+/// <param name="User">Thông tin người dùng công khai.</param>
 public sealed record AuthSessionDto(Guid UserId, int ExpiresIn, UserDto User);
 
 /// <summary>Body của GET /api/v1/auth/session (FE AuthBootstrap đọc data.user).</summary>
+/// <param name="User">Thông tin người dùng sau khi use case xác nhận phiên hợp lệ.</param>
 public sealed record CurrentSessionDto(UserDto User);
 
 /// <summary>
 /// Kết quả nội bộ giữa service và controller: có token để controller ghi vào cookie.
 /// Không bao giờ serialize nguyên object này ra JSON.
 /// </summary>
+/// <param name="AccessToken">JWT nguyên bản chỉ dùng để ghi cookie.</param>
+/// <param name="AccessTokenExpiresAt">Thời điểm hết hạn access token.</param>
+/// <param name="RefreshToken">Refresh token gốc; database chỉ lưu hash.</param>
+/// <param name="RefreshTokenExpiresAt">Thời điểm hết hạn refresh token ở server.</param>
+/// <param name="IsPersistent">Cho phép cookie refresh có hạn lưu phía trình duyệt.</param>
+/// <param name="Session">DTO session công khai trả về trong response body.</param>
 public sealed record AuthResult(
     string AccessToken,
     DateTimeOffset AccessTokenExpiresAt,
