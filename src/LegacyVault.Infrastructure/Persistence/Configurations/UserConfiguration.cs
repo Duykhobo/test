@@ -10,18 +10,20 @@ namespace LegacyVault.Infrastructure.Persistence.Configurations;
 /// </summary>
 public sealed class UserConfiguration : IEntityTypeConfiguration<User>
 {
+    /// <summary>Cấu hình schema User, dùng chung giới hạn với Domain.</summary>
+    /// <param name="builder">Builder mapping entity User.</param>
     public void Configure(EntityTypeBuilder<User> builder)
     {
         builder.ToTable("Users");
         builder.HasKey(u => u.Id);
 
-        builder.Property(u => u.Email).HasMaxLength(256).IsRequired();
+        builder.Property(u => u.Email).HasMaxLength(UserLimits.Email).IsRequired();
         // Unique index: DB tự chặn 2 tài khoản trùng email, kể cả khi code có bug.
         builder.HasIndex(u => u.Email).IsUnique();
 
-        builder.Property(u => u.FullName).HasMaxLength(200).IsRequired();
-        builder.Property(u => u.Phone).HasMaxLength(20);
-        builder.Property(u => u.PasswordHash).HasMaxLength(512).IsRequired();
+        builder.Property(u => u.FullName).HasMaxLength(UserLimits.FullName).IsRequired();
+        builder.Property(u => u.Phone).HasMaxLength(UserLimits.Phone);
+        builder.Property(u => u.PasswordHash).HasMaxLength(UserLimits.PasswordHash).IsRequired();
 
         // Lưu enum dạng chữ ("Admin") thay vì số (2): đọc DB trực tiếp dễ hiểu,
         // và chèn thêm giá trị enum ở giữa không làm sai dữ liệu cũ.

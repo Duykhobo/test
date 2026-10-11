@@ -36,45 +36,79 @@ public sealed class User : Entity
     /// <summary>Thời điểm đăng nhập thành công gần nhất.</summary>
     public DateTimeOffset? LastLoginAt { get; private set; }
 
-    /// <summary>Khung tạo tài khoản hợp lệ từ dữ liệu đã xác thực.</summary>
-    /// <param name="email">Email đầu vào.</param>
+    /// <summary>Tạo tài khoản từ dữ liệu đã được use case cho phép.</summary>
+    /// <param name="email">Email tài khoản.</param>
     /// <param name="fullName">Tên hiển thị.</param>
-    /// <param name="passwordHash">Hash được tạo bởi password hasher.</param>
+    /// <param name="passwordHash">Mật khẩu đã được băm.</param>
     /// <param name="role">Vai trò được server cho phép.</param>
-    /// <param name="status">Trạng thái khởi tạo được server cho phép.</param>
-    /// <param name="now">Thời điểm UTC từ TimeProvider của use case.</param>
+    /// <param name="status">Trạng thái khởi tạo.</param>
+    /// <param name="now">Thời điểm tạo tài khoản.</param>
     /// <param name="phone">Số điện thoại tùy chọn.</param>
-    /// <returns>Entity mới khi developer hoàn thiện factory.</returns>
-    /// <exception cref="NotImplementedException">Factory chưa triển khai.</exception>
+    /// <returns>Đối tượng User mới, chưa lưu vào database.</returns>
+    /// <exception cref="ArgumentNullException">Dữ liệu bắt buộc là null.</exception>
+    /// <exception cref="ArgumentException">Dữ liệu bắt buộc rỗng hoặc enum không hợp lệ.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Dữ liệu vượt giới hạn schema.</exception>
     public static User Create(string email, string fullName, string passwordHash,
         UserRole role, UserStatus status, DateTimeOffset now, string? phone = null)
     {
-        // TODO: [BẢN THIẾT KẾ THỰC THI - DEVELOPER BLUEPRINT]
-        // 1. [MỤC TIÊU & NGHIỆP VỤ]: Tạo tài khoản thỏa invariant domain, không cấp staff role từ input công khai.
-        // 2. [INPUT & OUTPUT]: Email/tên/hash/role/status/now/phone -> User mới.
-        // 3. [CÁC BƯỚC TUẦN TỰ]: Kiểm tra dữ liệu và enum; chuẩn hóa email; gán dữ liệu,
-        //    CreatedAt và trạng thái ban đầu. Unique email do constraint DB bảo vệ ở tầng persistence.
-        // 4. [HÀM / THƯ VIỆN]: NormalizeEmail, string, Enum.IsDefined; không gọi DB/hasher từ Domain.
-        // 5. [ĐIỀU KIỆN BIÊN & NGOẠI LỆ]: Null/rỗng, vượt giới hạn schema, hash thiếu,
-        //    role/status không hợp lệ; chốt cách báo invariant lỗi với service, không lưu mật khẩu gốc.
-        throw new NotImplementedException(nameof(Create));
+        string emailNormalized = NormalizeEmail(email);
+        ArgumentException.ThrowIfNullOrWhiteSpace(fullName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(passwordHash);
+
+        string trimmedFullName = fullName.Trim();
+        string? trimmedPhone = phone?.Trim();
+
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(
+            emailNormalized.Length, UserLimits.Email, nameof(email));
+
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(
+            trimmedFullName.Length, UserLimits.FullName, nameof(fullName));
+
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(
+            trimmedPhone?.Length ?? 0, UserLimits.Phone, nameof(phone));
+
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(
+            passwordHash.Length, UserLimits.PasswordHash, nameof(passwordHash));
+
+        if (!Enum.IsDefined(role))
+        {
+            throw new ArgumentException(
+                UserMessages.InvalidRole,
+                nameof(role));
+        }
+
+        if (!Enum.IsDefined(status))
+        {
+            throw new ArgumentException(
+                UserMessages.InvalidStatus,
+                nameof(status));
+        }
+
+        User user = new User
+        {
+            Email = emailNormalized,
+            FullName = trimmedFullName,
+            Phone = trimmedPhone,
+            PasswordHash = passwordHash,
+            Role = role,
+            Status = status,
+            CreatedAt = now
+        };
+        return user;
     }
 
-    /// <summary>Khung chuẩn hóa email dùng thống nhất khi tạo và tra cứu tài khoản.</summary>
-    /// <param name="email">Email đầu vào.</param>
-    /// <returns>Email chuẩn hóa khi hoàn thiện.</returns>
-    /// <exception cref="NotImplementedException">Chưa triển khai.</exception>
+    /// <summary>Chuẩn hóa email trước khi lưu hoặc tìm tài khoản.</summary>
+    /// <param name="email">Email người dùng cung cấp.</param>
+    /// <returns>Email đã bỏ khoảng trắng ngoài và chuyển thành chữ thường.</returns>
+    /// <exception cref="ArgumentNullException">Email là null.</exception>
+    /// <exception cref="ArgumentException">Email rỗng hoặc chỉ chứa khoảng trắng.</exception>
     public static string NormalizeEmail(string email)
     {
-        // TODO: [BẢN THIẾT KẾ THỰC THI - DEVELOPER BLUEPRINT]
-        // 1. [MỤC TIÊU & NGHIỆP VỤ]: Đảm bảo tạo/tra cứu dùng cùng chuẩn email.
-        // 2. [INPUT & OUTPUT]: Email -> chuỗi chuẩn hóa.
-        // 3. [CÁC BƯỚC TUẦN TỰ]: Kiểm tra input, trim khoảng trắng ngoài,
-        //    áp policy casing đã chốt tương thích collation/unique index.
-        // 4. [HÀM / THƯ VIỆN]: string.Trim/ToLowerInvariant theo policy; BCL.
-        // 5. [ĐIỀU KIỆN BIÊN & NGOẠI LỆ]: Null/rỗng/Unicode; không tự bỏ dấu chấm,
-        //    phần plus-tag hoặc gộp địa chỉ khác nhau; không áp chuẩn hóa này lên mật khẩu.
-        throw new NotImplementedException(nameof(NormalizeEmail));
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(email);
+        string trimmedEmail = email.Trim();
+        string normalizedEmail = trimmedEmail.ToLowerInvariant();
+        return normalizedEmail;
     }
 
     /// <summary>Khung kiểm tra trạng thái khóa tại thời điểm cho trước.</summary>
