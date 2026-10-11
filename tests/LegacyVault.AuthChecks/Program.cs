@@ -1,6 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
 using LegacyVault.Application.Features.Identity;
+using LegacyVault.Domain.Identity;
 
 namespace LegacyVault.AuthChecks;
 
@@ -34,6 +35,7 @@ internal static class Program
         Console.WriteLine("PASS: 11 validation cases and 2 public response contracts.");
 
         UserLockoutChecks.Run();
+        CheckRefreshToken();
     }
 
     /// <summary>Kiểm tra validation và tên field lỗi đúng contract DataAnnotations.</summary>
@@ -73,5 +75,103 @@ internal static class Program
         {
             throw new InvalidOperationException($"FAIL public JSON contract: {typeof(T).Name}");
         }
+    }
+
+    /// <summary>Kiểm tra validation và lifecycle refresh token trong RAM.</summary>
+    /// <exception cref="InvalidOperationException">Hành vi không đúng contract.</exception>
+    private static void CheckRefreshToken()
+    {
+        DateTimeOffset now = DateTimeOffset.UnixEpoch;
+        TimeSpan lifetime = TimeSpan.FromMinutes(1);
+        Guid userId = Guid.NewGuid();
+        Guid familyId = Guid.NewGuid();
+        string hash = new string('a', RefreshTokenRules.HashLength);
+
+        RefreshToken token = RefreshToken.Create(
+            userId, hash, familyId, true, now, lifetime);
+
+        DateTimeOffset expiry = now.Add(lifetime);
+
+        if (token.UserId != userId ||
+            token.FamilyId != familyId ||
+            token.TokenHash != hash.ToUpperInvariant() ||
+            !token.IsPersistent ||
+            token.CreatedAt != now ||
+            token.ExpiresAt != expiry ||
+            token.IsRevoked ||
+            !token.IsActive(now) ||
+            !token.IsActive(expiry.AddTicks(-1)) ||
+            !token.IsExpired(expiry) ||
+            token.IsActive(expiry))
+        {
+            throw new InvalidOperationException(
+                "FAIL: refresh token creation or expiry.");
+        }
+
+        ExpectArgumentFailure(() => RefreshToken.Create(
+            Guid.Empty, hash, familyId, false, now, lifetime));
+
+        ExpectArgumentFailure(() => RefreshToken.Create(
+            userId, hash, Guid.Empty, false, now, lifetime));
+
+        ExpectArgumentFailure(() => RefreshToken.Create(
+            userId, string.Empty, familyId, false, now, lifetime));
+
+        ExpectArgumentFailure(() => RefreshToken.Create(
+            userId, new string('z', RefreshTokenRules.HashLength),
+            familyId, false, now, lifetime));
+
+        ExpectArgumentFailure(() => RefreshToken.Create(
+            userId, hash[..^1], familyId, false, now, lifetime));
+
+        ExpectArgumentFailure(() => RefreshToken.Create(
+            userId, hash, familyId, false, now, TimeSpan.Zero));
+
+        ExpectArgumentFailure(() => RefreshToken.Create(
+            userId, hash, familyId, false, now, -lifetime));
+
+        ExpectArgumentFailure(() => token.Revoke(now, Guid.Empty));
+        ExpectArgumentFailure(() => token.Revoke(now, token.Id));
+        ExpectArgumentFailure(() => token.Revoke(now.AddTicks(-1)));
+
+        if (token.IsRevoked || token.ReplacedByTokenId is not null)
+        {
+            throw new InvalidOperationException(
+                "FAIL: invalid revoke must not mutate token.");
+        }
+
+        Guid replacementId = Guid.NewGuid();
+
+        token.Revoke(now, replacementId);
+        token.Revoke(now.AddSeconds(1), Guid.NewGuid());
+
+        if (!token.IsRevoked ||
+            token.IsActive(now) ||
+            token.RevokedAt != now ||
+            token.ReplacedByTokenId != replacementId)
+        {
+            throw new InvalidOperationException(
+                "FAIL: refresh token revocation must be idempotent.");
+        }
+
+        Console.WriteLine("PASS: Refresh token validation and lifecycle.");
+    }
+
+    /// <summary>Kiểm tra input không hợp lệ bị từ chối.</summary>
+    /// <param name="action">Thao tác phải ném ArgumentException hoặc lớp con.</param>
+    /// <exception cref="InvalidOperationException">Thao tác chấp nhận input sai.</exception>
+    private static void ExpectArgumentFailure(Action action)
+    {
+        try
+        {
+            action();
+        }
+        catch (ArgumentException)
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            "FAIL: expected argument validation failure.");
     }
 }
