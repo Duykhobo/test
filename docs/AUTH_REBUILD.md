@@ -8,13 +8,13 @@ User đã triển khai NormalizeEmail/Create và các method lockout. RefreshTok
 
 DbInitializer có thể gọi password hasher và User.Create để seed khi database chưa có user. Seed chỉ được gọi ở Development và không ghi mật khẩu vào log. AuthChecks đã bao phủ validation/DTO, lockout và lifecycle refresh token trong RAM; chưa chứng minh persistence an toàn khi request đồng thời.
 
-Thứ tự còn lại: JwtTokenService → AuthService và persistence concurrency/transaction → HTTP security → integration checks. Không viết test coi NotImplementedException là nghiệp vụ đúng.
+Thứ tự còn lại: AuthService và persistence concurrency/transaction → HTTP security → integration checks. Không viết test coi NotImplementedException là nghiệp vụ đúng.
 
 ## Trạng thái Security hiện tại
 
 Argon2PasswordHasher.Hash/Verify đã triển khai bằng package có sẵn, giữ định dạng hash cũ và whitelist bộ tham số hiện tại. Tham số serialize và độ dài Base64 được tính từ một nguồn cấu hình. Khi nâng tham số phải hỗ trợ hash cũ trước khi triển khai. PasswordHasherChecks chạy riêng để kiểm tra hành vi này.
 
-JwtTokenService.CreateAccessToken/CreateRefreshToken/HashRefreshToken/RefreshTokenLifetime vẫn là TODO blueprint và ném NotImplementedException. Helper CreateSigningKey phục vụ JwtBearer validator, không cấp token. AuthService cũng còn scaffold; seed thành công và checks Domain pass không có nghĩa endpoint Auth đã chạy được.
+JwtTokenService đã triển khai ký HS256, claims sub/jti/role, expiry chuẩn hóa đến giây và refresh token CSPRNG 64 byte kèm hash SHA-256. JwtTokenServiceChecks đã chạy pass và được thêm vào workflow; không đọc signing key thật. AuthService đã nhận dependency qua constructor; bốn use case vẫn là scaffold. Bước tiếp theo developer triển khai GetCurrentUserAsync: kiểm tra principal, tải user read-only, kiểm tra Active và map UserDto. Seed thành công và checks Domain/security pass chưa chứng minh endpoint Auth hoạt động.
 
 Checks password hasher hiện có: round-trip Unicode, mật khẩu sai, salt khác nhau, hash bị sửa, Base64 lỗi, tham số không hỗ trợ, giới hạn input và culture. Chưa có fixture hash lịch sử độc lập để chứng minh tương thích ngoài định dạng/bộ tham số hiện tại. Khi triển khai token service, thêm checks signature/issuer/audience/expiry, secret claims, refresh randomness/encoding và hash deterministic. Test JWT dùng signing key fixture riêng, không đọc hoặc log user-secrets thật.
 
@@ -76,9 +76,11 @@ Kiểm tra contract/validation và Domain bằng BCL; kiểm tra hasher dùng pa
 ```powershell
 dotnet run --project tests/LegacyVault.AuthChecks --configuration Release
 dotnet run --file tests/security/PasswordHasherChecks.cs --configuration Release
+dotnet run --file tests/security/JwtOptionsChecks.cs --configuration Release
+dotnet run --file tests/security/JwtTokenServiceChecks.cs --configuration Release
 ```
 
-Đây là console checks, không được `dotnet test` tự khám phá. Workflow `.github/workflows/backend-checks.yml` chạy khi push hoặc mở/cập nhật PR: cài SDK từ global.json, restore, build Release và chạy rõ cả hai bộ checks. Exit code khác zero làm job thất bại. Workflow không khởi động API hoặc seed database. Cần chọn job này làm required status check trong branch protection nếu muốn bắt buộc trước merge; file workflow không tự bật branch protection.
+Đây là console checks, không được `dotnet test` tự khám phá. Workflow `.github/workflows/backend-checks.yml` chạy khi push hoặc mở/cập nhật PR: cài SDK từ global.json, restore, build Release và chạy rõ các bộ checks Domain, password hasher, JWT options và JWT token service. Exit code khác zero làm job thất bại. Workflow không khởi động API hoặc seed database. Cần chọn job này làm required status check trong branch protection nếu muốn bắt buộc trước merge; file workflow không tự bật branch protection.
 
 AuthChecks bao phủ 11 tình huống input, JSON whitelist/camelCase của hai response session, lockout và refresh lifecycle. PasswordHasherChecks bao phủ hành vi mô tả ở phần Security. Chưa kiểm thử middleware, cookie, database, concurrency hoặc use case Auth; service vẫn là scaffold. Lần chạy đầu của file-based check cần restore project references.
 

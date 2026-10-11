@@ -1,4 +1,5 @@
 using LegacyVault.Domain.Common;
+using LegacyVault.Application.Common.Interfaces;
 
 namespace LegacyVault.Application.Features.Identity;
 
@@ -32,12 +33,40 @@ public interface IAuthService
 
 /// <summary>Khung Auth cho developer tự hoàn thiện nghiệp vụ trên .NET 10.</summary>
 /// <remarks>
-/// Khi triển khai, inject IAppDbContext, IPasswordHasher, ITokenService,
-/// ICurrentUser và TimeProvider bằng constructor; dùng interface hiện có.
-/// Scaffold chưa truy cập database và chưa cấp hoặc thu hồi token.
+/// Dependency được nhận qua constructor; scaffold chưa truy cập database
+/// và chưa cấp hoặc thu hồi token.
 /// </remarks>
 public sealed class AuthService : IAuthService
 {
+    private readonly IAppDbContext _db;
+    private readonly IPasswordHasher _passwordHasher;
+    private readonly ITokenService _tokenService;
+    private readonly ICurrentUser _currentUser;
+    private readonly TimeProvider _timeProvider;
+
+    /// <summary>Nhận các dependency của use case; không thực hiện I/O trong constructor.</summary>
+    /// <param name="db">Context persistence scoped của request.</param>
+    /// <param name="passwordHasher">Hasher dùng xác thực mật khẩu.</param>
+    /// <param name="tokenService">Service cấp token và hash refresh token.</param>
+    /// <param name="currentUser">Principal đã được middleware xác thực.</param>
+    /// <param name="timeProvider">Đồng hồ để nghiệp vụ có thể kiểm thử.</param>
+    /// <exception cref="ArgumentNullException">Một dependency là null.</exception>
+    public AuthService(IAppDbContext db, IPasswordHasher passwordHasher,
+        ITokenService tokenService, ICurrentUser currentUser, TimeProvider timeProvider)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        ArgumentNullException.ThrowIfNull(passwordHasher);
+        ArgumentNullException.ThrowIfNull(tokenService);
+        ArgumentNullException.ThrowIfNull(currentUser);
+        ArgumentNullException.ThrowIfNull(timeProvider);
+
+        _db = db;
+        _passwordHasher = passwordHasher;
+        _tokenService = tokenService;
+        _currentUser = currentUser;
+        _timeProvider = timeProvider;
+    }
+
     /// <inheritdoc />
     /// <exception cref="NotImplementedException">Developer chưa triển khai login.</exception>
     public Task<Result<AuthResult>> LoginAsync(LoginRequest request, CancellationToken ct)
@@ -119,11 +148,13 @@ public sealed class AuthService : IAuthService
         // 1. [MỤC TIÊU & NGHIỆP VỤ]: Trả người dùng công khai của phiên đã xác thực, không tin role header.
         // 2. [INPUT & OUTPUT]: Principal qua ICurrentUser + ct -> Result<UserDto> hoặc SessionExpired.
         // 3. [CÁC BƯỚC TUẦN TỰ]:
-        //    - Kiểm tra UserId từ principal đã xác thực; thiếu thì trả SessionExpired.
+        //    - Kiểm tra _currentUser.IsAuthenticated và UserId khác null/Guid.Empty;
+        //      không đạt thì trả Result<UserDto>.Failure(AuthErrors.SessionExpired).
         //    - Tải user read-only; kiểm tra active và trạng thái phiên/thu hồi theo policy đã chốt.
         //    - Map sang UserDto; không thay đổi DB, không đưa PasswordHash/token vào response.
-        // 4. [HÀM / THƯ VIỆN]: ICurrentUser.UserId, IAppDbContext.Users,
-        //    EF Core AsNoTracking/SingleOrDefaultAsync + ct, UserDto.From, AuthErrors.SessionExpired.
+        // 4. [HÀM / THƯ VIỆN]: _currentUser.IsAuthenticated/UserId, _db.Users,
+        //    Microsoft.EntityFrameworkCore.AsNoTracking/SingleOrDefaultAsync + ct,
+        //    UserStatus.Active, UserDto.From, Result<UserDto>.Success/Failure.
         // 5. [ĐIỀU KIỆN BIÊN & NGOẠI LỆ]: Principal thiếu/sai, user đã xóa/inactive, quyền thay đổi,
         //    phiên đã revoke nhưng JWT chưa hết hạn. Hủy request/lỗi DB phải propagate.
         //    Middleware phải kiểm tra JWT trước use case; không dùng X-Active-Role để cấp quyền.
