@@ -9,6 +9,9 @@ namespace LegacyVault.Application;
 /// </summary>
 public static class DependencyInjection
 {
+    /// <summary>Đăng ký các implementation use case của Application với lifetime scoped.</summary>
+    /// <param name="services">Service collection của ứng dụng.</param>
+    /// <returns>Service collection sau khi đăng ký use case.</returns>
     public static IServiceCollection AddApplication(this IServiceCollection services)
     {
         // Scoped = mỗi HTTP request một instance, dùng chung DbContext của request đó.
