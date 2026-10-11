@@ -112,3 +112,12 @@ dotnet run --file tests/security/LoginFailureSqlChecks.cs --configuration Releas
 ```
 
 Cần đặt LEGACYVAULT_TEST_CONNECTION_STRING trước khi chạy. Check bao phủ email không tồn tại, bộ đếm lưu ở DB, khóa không bị kéo dài, một stale-version dẫn đến reload/retry, giới hạn ba lần ghi và cancellation. Interceptor chỉ thay original rowversion để tạo xung đột SQL có kiểm soát; đây không phải kiểm thử tải hoặc hai request HTTP chạy song song. Fixture luôn rollback; không đọc signing key thật. Chưa bao phủ user bị xóa hoặc password đổi đúng lúc conflict. Check SQL chưa nằm trong CI vì workflow chưa cấp SQL Server. Việc email không tồn tại dùng dummy hash không bảo đảm mọi nhánh có cùng thời gian phản hồi; nhánh sai/hợp lệ còn chưa đồng nhất đầy đủ trong giai đoạn scaffold.
+## Checkpoint cấp phiên Owner/Verifier
+
+LoginAsync đã cấp phiên cho Owner/Verifier sau khi mật khẩu đúng, user Active và không bị khóa. Guard Admin nằm trước transaction: challenge 2FA vẫn là TODO, hiện ném NotImplementedException và chưa có login Admin hoạt động. User và refresh hash được lưu trong transaction; ký access token, dựng DTO rồi commit trước khi trả AuthResult. Access token 15 phút, refresh token 7 ngày; RememberMe quyết định cookie persistent, không đổi lifetime server. Conflict ở nhánh cấp phiên được truyền lên và rollback, chưa tự retry. Refresh/logout còn scaffold.
+
+```powershell
+dotnet run --file tests/security/LoginSessionSqlChecks.cs --configuration Release
+```
+
+Cần đặt LEGACYVAULT_TEST_CONNECTION_STRING tới SQL Server development đã áp dụng migrations. Check dùng signing key fixture, không đọc secrets. Bao phủ Owner/Verifier commit phiên, JWT claims/expiry, refresh hash/lifetime, DTO và RememberMe; Admin bị chặn; lỗi ký JWT và stale-version dẫn đến rollback cả user/refresh token. Check tạo user riêng và thực sự commit phiên để kiểm tra persistence, sau đó cleanup đúng các fixture ID trong finally. Nếu tiến trình bị kill trước cleanup, fixture có thể còn trong DB development. Đây chưa phải HTTP/cookie test, chưa mô phỏng lỗi mạng lúc commit hoặc chứng minh mọi kịch bản request đồng thời. Check SQL chưa chạy trong CI vì workflow chưa cấp SQL Server.

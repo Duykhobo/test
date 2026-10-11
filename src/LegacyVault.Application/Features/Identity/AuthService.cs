@@ -35,8 +35,8 @@ public interface IAuthService
 
 /// <summary>Khung Auth cho developer tự hoàn thiện nghiệp vụ trên .NET 10.</summary>
 /// <remarks>
-/// Đọc session và nhánh đăng nhập sai đã truy cập database.
-/// Cấp phiên, refresh và logout chưa được triển khai.
+/// Đã triển khai đọc session, xử lý đăng nhập sai và cấp phiên Owner/Verifier.
+/// Challenge Admin, refresh và logout chưa được triển khai.
 /// </remarks>
 public sealed class AuthService : IAuthService
 {
@@ -82,7 +82,7 @@ public sealed class AuthService : IAuthService
     /// <exception cref="ArgumentNullException">Request là null.</exception>
     /// <exception cref="OperationCanceledException">Thao tác bị hủy.</exception>
     /// <exception cref="DbUpdateConcurrencyException">Hết lượt retry hoặc conflict ngoài user hiện tại.</exception>
-    /// <exception cref="NotImplementedException">Nhánh cấp phiên chưa triển khai.</exception>
+    /// <exception cref="NotImplementedException">Challenge Admin chưa triển khai.</exception>
     public async Task<Result<AuthResult>> LoginAsync(LoginRequest request, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -164,17 +164,52 @@ public sealed class AuthService : IAuthService
             return Result<AuthResult>.Failure(
                 AuthErrors.AccountNotActive);
         }
-        // TODO: [BẢN THIẾT KẾ THỰC THI - DEVELOPER BLUEPRINT]
-        // 1. [MỤC TIÊU & NGHIỆP VỤ]: Cấp phiên sau khi đủ điều kiện xác thực/challenge.
-        // 2. [INPUT & OUTPUT]: User + RememberMe + ct -> AuthResult sau commit.
-        // 3. [CÁC BƯỚC TUẦN TỰ]: Hoàn thành challenge theo policy; mở transaction;
-        //    cập nhật login thành công, tạo refresh family và lưu hash; commit rồi trả kết quả.
-        //    Nếu user thay đổi đồng thời, rollback và đánh giá lại mật khẩu/status/quyền/lockout.
-        // 4. [HÀM / THƯ VIỆN]: BeginTransactionAsync, RegisterSuccessfulLogin,
-        //    ITokenService, RefreshToken.Create, SaveChangesAsync, CommitAsync, UserDto.From.
-        // 5. [ĐIỀU KIỆN BIÊN & NGOẠI LỆ]: Không trả token nếu commit thất bại;
-        //    không retry mù, không log secret; propagate lỗi DB và cancellation.
-        throw new NotImplementedException(AuthErrors.ScaffoldNotImplemented);
+        if (user.Role == UserRole.Admin)
+        {
+            // TODO: [BẢN THIẾT KẾ THỰC THI - DEVELOPER BLUEPRINT]
+            // 1. [MỤC TIÊU & NGHIỆP VỤ]: Yêu cầu Admin hoàn thành 2FA trước khi cấp phiên.
+            // 2. [INPUT & OUTPUT]: User đã đúng mật khẩu -> challenge, chưa trả token phiên.
+            // 3. [CÁC BƯỚC TUẦN TỰ]: Chốt contract challenge; tạo challenge có hạn;
+            //    chỉ cấp phiên sau khi endpoint verify xác nhận thành công.
+            // 4. [HÀM / THƯ VIỆN]: Contract challenge và dịch vụ 2FA sẽ được chốt riêng.
+            // 5. [ĐIỀU KIỆN BIÊN & NGOẠI LỆ]: Challenge hết hạn, replay, sai mã;
+            //    không cấp JWT Admin từ password-only login.
+            throw new NotImplementedException(AuthErrors.ScaffoldNotImplemented);
+        }
+        await using var transaction = await _db.BeginTransactionAsync(ct);
+        now = _timeProvider.GetUtcNow();
+        user.RegisterSuccessfulLogin(now);
+        var generatedRefreshToken = _tokenService.CreateRefreshToken();
+        Guid familyId = Guid.NewGuid();
+        var refreshToken = RefreshToken.Create(
+            user.Id,
+            generatedRefreshToken.Hash,
+            familyId,
+            request.RememberMe,
+            now,
+            _tokenService.RefreshTokenLifetime);
+        _db.RefreshTokens.Add(refreshToken);
+        await _db.SaveChangesAsync(ct);
+
+        var accessToken = _tokenService.CreateAccessToken(user);
+        UserDto userDto = UserDto.From(user);
+        TimeSpan remainingLifetime = accessToken.ExpiresAt - _timeProvider.GetUtcNow();
+        int expiresIn = checked((int)Math.Max(
+            0, Math.Ceiling(remainingLifetime.TotalSeconds)));
+        var session = new AuthSessionDto(
+            user.Id,
+            expiresIn,
+            userDto);
+        var authResult = new AuthResult(
+            accessToken.Value,
+            accessToken.ExpiresAt,
+            generatedRefreshToken.Value,
+            refreshToken.ExpiresAt,
+            refreshToken.IsPersistent,
+            session);
+        await transaction.CommitAsync(ct);
+
+        return Result<AuthResult>.Success(authResult);
     }
 
     /// <inheritdoc />
