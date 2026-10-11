@@ -1,5 +1,7 @@
 using LegacyVault.Domain.Common;
 using LegacyVault.Application.Common.Interfaces;
+using LegacyVault.Domain.Identity;
+using Microsoft.EntityFrameworkCore;
 
 namespace LegacyVault.Application.Features.Identity;
 
@@ -141,8 +143,7 @@ public sealed class AuthService : IAuthService
     }
 
     /// <inheritdoc />
-    /// <exception cref="NotImplementedException">Developer chưa triển khai đọc session.</exception>
-    public Task<Result<UserDto>> GetCurrentUserAsync(CancellationToken ct)
+    public async Task<Result<UserDto>> GetCurrentUserAsync(CancellationToken ct)
     {
         // TODO: [BẢN THIẾT KẾ THỰC THI - DEVELOPER BLUEPRINT]
         // 1. [MỤC TIÊU & NGHIỆP VỤ]: Trả người dùng công khai của phiên đã xác thực, không tin role header.
@@ -158,6 +159,22 @@ public sealed class AuthService : IAuthService
         // 5. [ĐIỀU KIỆN BIÊN & NGOẠI LỆ]: Principal thiếu/sai, user đã xóa/inactive, quyền thay đổi,
         //    phiên đã revoke nhưng JWT chưa hết hạn. Hủy request/lỗi DB phải propagate.
         //    Middleware phải kiểm tra JWT trước use case; không dùng X-Active-Role để cấp quyền.
-        throw new NotImplementedException(AuthErrors.ScaffoldNotImplemented);
+        Guid? currentUserId = _currentUser.UserId;
+        if (!_currentUser.IsAuthenticated || currentUserId is null || currentUserId == Guid.Empty)
+        {
+            return Result<UserDto>.Failure(AuthErrors.SessionExpired);
+        }
+        User? user = await _db.Users
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+                user => user.Id == currentUserId.Value,
+                ct);
+
+        if (user is null || user.Status != UserStatus.Active)
+        {
+            return Result<UserDto>.Failure(AuthErrors.SessionExpired);
+        }
+
+        return Result<UserDto>.Success(UserDto.From(user));
     }
 }
