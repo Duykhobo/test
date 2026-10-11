@@ -5,7 +5,7 @@ namespace LegacyVault.Application.Features.Identity;
 
 // DTO (Data Transfer Object) = hình dạng dữ liệu đi qua API.
 // Tách riêng khỏi entity để: (1) không lộ PasswordHash, (2) đổi DB không làm vỡ hợp đồng với FE.
-// Tên property khớp với file FE: src/features/auth/model/auth.types.ts và src/entities/user/model/user.types.ts
+// Đây là contract của backend mẫu; DTO FE legacy cần được đối chiếu trước tích hợp.
 
 /// <summary>Body của POST /api/v1/auth/login.</summary>
 /// <remarks>
@@ -14,15 +14,18 @@ namespace LegacyVault.Application.Features.Identity;
 /// </remarks>
 public sealed class LoginRequest
 {
-    [Required(ErrorMessage = "Email là bắt buộc.")]
-    [EmailAddress(ErrorMessage = "Email không hợp lệ.")]
-    [MaxLength(256)]
+    /// <summary>Email đăng nhập; service chịu trách nhiệm chuẩn hóa trước khi truy vấn.</summary>
+    [Required(ErrorMessage = AuthValidation.EmailRequired)]
+    [EmailAddress(ErrorMessage = AuthValidation.EmailInvalid)]
+    [MaxLength(AuthValidation.EmailMaxLength, ErrorMessage = AuthValidation.EmailTooLong)]
     public string Email { get; init; } = string.Empty;
 
-    [Required(ErrorMessage = "Mật khẩu là bắt buộc.")]
-    [MaxLength(128)]
+    /// <summary>Mật khẩu đầu vào, chỉ dùng để xác thực và không được ghi log.</summary>
+    [Required(ErrorMessage = AuthValidation.PasswordRequired)]
+    [MaxLength(AuthValidation.PasswordMaxLength, ErrorMessage = AuthValidation.PasswordTooLong)]
     public string Password { get; init; } = string.Empty;
 
+    /// <summary>Cho phép refresh cookie tồn tại qua lần đóng trình duyệt.</summary>
     public bool RememberMe { get; init; }
 }
 
@@ -33,7 +36,7 @@ public sealed class LogoutRequest
     public bool RevokeAllDevices { get; init; }
 }
 
-/// <summary>Thông tin người dùng trả về cho FE (khớp interface User bên FE).</summary>
+/// <summary>Thông tin người dùng công khai; không chứa mật khẩu hoặc token.</summary>
 public sealed record UserDto(
     Guid Id,
     string Email,
@@ -44,7 +47,9 @@ public sealed record UserDto(
     DateTimeOffset CreatedAt,
     DateTimeOffset? UpdatedAt)
 {
-    // Map tay (nhóm không dùng AutoMapper): rõ ràng, dễ debug, IDE tìm được chỗ dùng.
+    /// <summary>Chuyển entity sang DTO công khai theo contract backend mẫu.</summary>
+    /// <param name="user">Entity người dùng đã tải từ database.</param>
+    /// <returns>DTO không chứa PasswordHash hoặc dữ liệu token.</returns>
     public static UserDto From(User user) => new(
         user.Id,
         user.Email,
@@ -56,7 +61,7 @@ public sealed record UserDto(
         user.UpdatedAt);
 }
 
-/// <summary>Body trả về khi đăng nhập thành công (khớp AuthSession bên FE, trừ token).</summary>
+/// <summary>Body trả về khi đăng nhập hoặc refresh thành công.</summary>
 /// <remarks>
 /// Token KHÔNG nằm trong body: chúng được đặt vào cookie HttpOnly,
 /// JavaScript không đọc được → mã độc XSS không lấy cắp được token.
