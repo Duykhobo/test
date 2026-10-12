@@ -1,3 +1,4 @@
+using System.Data;
 using LegacyVault.Application.Common.Interfaces;
 using LegacyVault.Domain.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -21,6 +22,11 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
     /// <inheritdoc />
     public Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default)
         => Database.BeginTransactionAsync(cancellationToken);
+
+    /// <inheritdoc />
+    public Task<IDbContextTransaction> BeginTransactionAsync(
+        IsolationLevel isolationLevel, CancellationToken cancellationToken = default)
+        => Database.BeginTransactionAsync(isolationLevel, cancellationToken);
 
     /// <summary>Áp dụng các mapping entity được khai báo trong assembly Infrastructure.</summary>
     /// <param name="modelBuilder">Builder cấu hình model EF Core.</param>

@@ -1,3 +1,4 @@
+using System.Data;
 using LegacyVault.Domain.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -26,6 +27,17 @@ public interface IAppDbContext
     /// <returns>Transaction cần await using; chỉ commit sau khi lưu thành công.</returns>
     /// <remarks>Transaction chưa commit được rollback khi dispose; không tự giải quyết stale update.</remarks>
     Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Mở transaction với isolation level do use case lựa chọn.</summary>
+    /// <param name="isolationLevel">Mức cô lập áp dụng từ trước truy vấn đầu tiên.</param>
+    /// <param name="cancellationToken">Token hủy thao tác mở transaction.</param>
+    /// <returns>Transaction cần dispose; chỉ trả token phiên sau commit thành công.</returns>
+    /// <remarks>
+    /// Serializable chỉ bảo vệ rotation/revocation khi mọi đường ghi liên quan cùng tuân thủ
+    /// giao thức transaction. Deadlock vẫn có thể xảy ra; không retry mù để cấp phiên.
+    /// </remarks>
+    Task<IDbContextTransaction> BeginTransactionAsync(
+        IsolationLevel isolationLevel, CancellationToken cancellationToken = default);
 
     /// <summary>Lưu các thay đổi đang được DbContext theo dõi vào database.</summary>
     /// <param name="cancellationToken">Token hủy thao tác lưu.</param>
