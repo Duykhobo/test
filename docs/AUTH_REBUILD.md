@@ -116,7 +116,7 @@ Cần đặt LEGACYVAULT_TEST_CONNECTION_STRING trước khi chạy. Check bao p
 
 LoginAsync đã cấp phiên cho Owner/Verifier sau khi mật khẩu đúng, user Active và không bị khóa. Guard Admin nằm trước transaction: challenge 2FA vẫn là TODO, hiện ném NotImplementedException và chưa có login Admin hoạt động. User và refresh hash được lưu trong transaction; ký access token, dựng DTO rồi commit trước khi trả AuthResult. Access token 15 phút, refresh token 7 ngày; RememberMe quyết định cookie persistent, không đổi lifetime server. Conflict ở nhánh cấp phiên được truyền lên và rollback, chưa tự retry. Refresh/logout còn scaffold.
 
-## Checkpoint blueprint refresh rotation
+## Checkpoint blueprint refresh rotation (lich su)
 
 - Use case: AUTH-REFRESH, `POST /api/v1/auth/refresh`; cookie đầu vào, `AuthSessionDto` và cookie mới sau commit. Đây là blueprint, endpoint chưa có nghiệp vụ refresh hoạt động.
 - Phân tầng: Application định nghĩa flow qua `IAppDbContext`/`ITokenService`; Infrastructure cung cấp transaction SQL Server. FE nối sau qua shared contract, entities user, features auth, app bootstrap.
@@ -128,6 +128,18 @@ LoginAsync đã cấp phiên cho Owner/Verifier sau khi mật khẩu đúng, use
 DoD sau khi developer triển khai: build Release; SQL checks cho rotation thành công giữ FamilyId/IsPersistent, token thiếu/sai/hết hạn, user inactive/locked, replay đã commit thu hồi, lỗi ký rollback, cancellation và hai refresh/refresh-logout đồng thời. Kiểm tra persistence bằng context mới sau commit; không log bearer secret. Check transaction hiện tại chỉ xác nhận isolation/rollback, chưa thay thế các checks nghiệp vụ này.
 
 Manual HTTP: login Owner/Verifier, refresh bằng cookie hiện tại, kiểm tra cookie mới và DTO; gửi lại cookie cũ và kiểm tra policy replay; thử hai request đồng thời và logout trong lúc refresh. Chưa nghiệm thu các kịch bản này khi RefreshAsync còn ném NotImplementedException.
+
+## Checkpoint refresh absolute va strict replay
+
+Developer da hoan thien RefreshAsync. Policy da chot: replacement giu nguyen ExpiresAt cua token cu (absolute), FamilyId va IsPersistent; replay token revoked thu hoi ca family va commit truoc khi tra SessionExpired. Admin van bi chan cho den khi co contract 2FA. Logout con scaffold.
+
+```powershell
+dotnet run --file tests/security/RefreshRotationSqlChecks.cs --configuration Release
+```
+
+Dat LEGACYVAULT_TEST_CONNECTION_STRING toi SQL Server development da ap dung migrations. Check tao fixture rieng, ky bang khoa fixture, khong doc secrets; cleanup dung user ID trong finally. Check doc lai bang context moi de xac nhan rotation/absolute expiry/cookie policy/link replacement, strict replay da commit, rollback khi signer loi. Hai context duoc dong bo truoc SaveChanges de tao tranh chap Serializable: mot request commit, request con lai la SQL deadlock victim (1205), khong retry. Day la ket qua persistence, khong phai cam ket ca hai HTTP request deu thanh cong. Neu process bi kill, fixture co the con trong DB development.
+
+Chua bao phu HTTP/cookie middleware, refresh-logout dong thoi, loi mang luc commit, cac nhanh input/expiry/user status va cancellation trong check moi nay. Chua chay SQL checks trong CI vi chua cap SQL Server. JWT access da cap khong bi vo hieu ngay boi viec revoke refresh family.
 
 ```powershell
 dotnet run --file tests/security/LoginSessionSqlChecks.cs --configuration Release

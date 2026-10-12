@@ -35,8 +35,8 @@ public interface IAuthService
 
 /// <summary>Khung Auth cho developer tự hoàn thiện nghiệp vụ trên .NET 10.</summary>
 /// <remarks>
-/// Đã triển khai đọc session, xử lý đăng nhập sai và cấp phiên Owner/Verifier.
-/// Challenge Admin, refresh và logout chưa được triển khai.
+/// Đã triển khai đọc session, đăng nhập Owner/Verifier và refresh absolute với strict replay.
+/// Challenge Admin và logout chưa được triển khai.
 /// </remarks>
 public sealed class AuthService : IAuthService
 {
@@ -213,42 +213,87 @@ public sealed class AuthService : IAuthService
     }
 
     /// <inheritdoc />
-    /// <exception cref="NotImplementedException">Developer chưa triển khai refresh.</exception>
-    public Task<Result<AuthResult>> RefreshAsync(string? refreshToken, CancellationToken ct)
+    /// <exception cref="OperationCanceledException">Request bị hủy.</exception>
+    /// <remarks>
+    /// Rotation giữ hạn absolute; replay commit thu hồi cả family trước khi trả lỗi phiên.
+    /// Lỗi ký token hoặc persistence được truyền lên; không retry tự động khi deadlock.
+    /// </remarks>
+    public async Task<Result<AuthResult>> RefreshAsync(string? refreshToken, CancellationToken ct)
     {
-        // TODO: [BẢN THIẾT KẾ THỰC THI - DEVELOPER BLUEPRINT]
-        // 1. [MỤC TIÊU & NGHIỆP VỤ]: Tiêu thụ refresh token một lần, xoay vòng và phát hiện replay.
-        // 2. [INPUT & OUTPUT]: Refresh token từ cookie + ct -> Result<AuthResult> hoặc SessionExpired.
-        // 3. [CÁC BƯỚC TUẦN TỰ]:
-        //    a. Gọi ct.ThrowIfCancellationRequested(); token null/rỗng -> Failure(SessionExpired).
-        //       HashRefreshToken nhận nguyên chuỗi, không trim/đổi casing; chỉ bắt ArgumentException
-        //       quanh lời gọi hash để ánh xạ input sai thành SessionExpired, không bắt toàn use case.
-        //    b. Mở await using transaction qua BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct)
-        //       TRƯỚC mọi truy vấn DB; tải tracked token bằng TokenHash, Include(User), truyền ct.
-        //       Không tìm thấy -> SessionExpired; không dùng bản ghi cache/AsNoTracking cho rotation.
-        //    c. Đọc now từ TimeProvider sau khi truy vấn hoàn tất; xét IsRevoked trước IsExpired.
-        //       Với token revoked, áp dụng policy replay đã chốt: tải mọi token cùng FamilyId,
-        //       Revoke(now) các bản ghi chưa revoked, SaveChangesAsync(ct), CommitAsync(ct), rồi trả lỗi.
-        //       Return lỗi trước commit sẽ rollback việc thu hồi family; giữ token cũ để phát hiện replay.
-        //    d. Token hết hạn, user không Active hoặc bị khóa -> SessionExpired, không cấp phiên.
-        //       Admin vẫn chưa có contract chứng minh 2FA cho phiên: chưa cho refresh Admin hoạt động.
-        //    e. Sinh token mới; RefreshToken.Create dùng UserId, FamilyId, IsPersistent của token cũ.
-        //       Lifetime theo policy absolute/sliding đã chốt; không nhận RememberMe/role từ request.
-        //       oldToken.Revoke(now, newToken.Id); Add(newToken); SaveChangesAsync(ct) cùng transaction.
-        //    f. Ký access token, dựng UserDto/AuthSessionDto/AuthResult như nhánh login; ExpiresIn
-        //       tính từ expiry JWT và đồng hồ hiện tại. CommitAsync(ct) rồi mới trả Success.
-        //       Api cập nhật cookie sau thành công; lỗi ký token hoặc commit không được trả phiên mới.
-        // 4. [HÀM / THƯ VIỆN]: ITokenService.HashRefreshToken/CreateRefreshToken/CreateAccessToken,
-        //    RefreshToken.Create/Revoke, EF Core, IAppDbContext, TimeProvider, AuthErrors.SessionExpired.
-        //    Include/SingleOrDefaultAsync/ToListAsync, BeginTransactionAsync(IsolationLevel.Serializable, ct).
-        // 5. [ĐIỀU KIỆN BIÊN & NGOẠI LỆ]: Token thiếu/không tồn tại/hết hạn/revoked; hai refresh đồng thời.
-        //    Serializable có thể deadlock khi hai request cùng đọc rồi ghi: propagate lỗi, không retry mù.
-        //    Mọi đường logout/revoke phải dùng cùng giao thức và truy vấn toàn family trong transaction;
-        //    isolation riêng ở refresh không bảo vệ trước đường ghi khác không tuân thủ giao thức.
-        //    Chốt absolute/sliding expiry và strict replay (nhiều tab có thể làm mất phiên vừa xoay).
-        //    Check SQL hiện tại chỉ chứng minh isolation/rollback, chưa chứng minh rotation đồng thời.
-        //    Propagate cancellation/lỗi DB; không log token; không trả token mới nếu commit thất bại.
-        throw new NotImplementedException(AuthErrors.ScaffoldNotImplemented);
+        ct.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(refreshToken))
+        {
+            return Result<AuthResult>.Failure(AuthErrors.SessionExpired);
+        }
+        string tokenHash;
+        try
+        {
+            tokenHash = _tokenService.HashRefreshToken(refreshToken);
+
+        }
+        catch (ArgumentException)
+        {
+            return Result<AuthResult>.Failure(AuthErrors.SessionExpired);
+        }
+        await using var transaction = await _db.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct);
+        RefreshToken? storedToken = await _db.RefreshTokens.Include(token => token.User).SingleOrDefaultAsync(token => token.TokenHash == tokenHash, ct);
+        if(storedToken is null){
+            return Result<AuthResult>.Failure(AuthErrors.SessionExpired);
+        }
+        DateTimeOffset now = _timeProvider.GetUtcNow();
+        if (storedToken.IsRevoked) {
+            List<RefreshToken> familyTokens = await _db.RefreshTokens.Where(token => token.FamilyId == storedToken.FamilyId).ToListAsync(ct);
+            now = _timeProvider.GetUtcNow();
+            foreach (RefreshToken familyToken in familyTokens){
+                if(!familyToken.IsRevoked){
+                    familyToken.Revoke(now);
+                }
+            }
+            await _db.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
+            return Result<AuthResult>.Failure(AuthErrors.SessionExpired);
+        }
+        User user = storedToken.User;
+        if(storedToken.IsExpired(now) || user.Status != UserStatus.Active || user.Role == UserRole.Admin || user.IsLockedOut(now))
+        {
+            return Result<AuthResult>.Failure(AuthErrors.SessionExpired);
+        }
+        now = _timeProvider.GetUtcNow();
+        TimeSpan remainingLifetime = storedToken.ExpiresAt - now;
+        if( remainingLifetime <= TimeSpan.Zero){
+            return Result<AuthResult>.Failure(AuthErrors.SessionExpired);
+        }
+        GeneratedRefreshToken generatedRefreshToken = _tokenService.CreateRefreshToken();
+        RefreshToken replacementToken = RefreshToken.Create(
+            storedToken.UserId,
+            generatedRefreshToken.Hash,
+            storedToken.FamilyId,
+            storedToken.IsPersistent,
+            now,
+            remainingLifetime
+        );
+        storedToken.Revoke(now, replacementToken.Id);
+        _db.RefreshTokens.Add(replacementToken);
+        await _db.SaveChangesAsync(ct);
+        AccessToken accessToken = _tokenService.CreateAccessToken(user);
+        UserDto userDto = UserDto.From(user);
+        TimeSpan accessRemaining = accessToken.ExpiresAt - _timeProvider.GetUtcNow();
+        int expiresIn = checked((int)Math.Max(0, Math.Ceiling(accessRemaining.TotalSeconds)));
+        var session = new AuthSessionDto(
+            user.Id,
+            expiresIn,
+            userDto
+        );
+        var authResult = new AuthResult(
+            accessToken.Value,
+            accessToken.ExpiresAt,
+            generatedRefreshToken.Value,
+            replacementToken.ExpiresAt,
+            replacementToken.IsPersistent,
+            session
+        );
+        await transaction.CommitAsync(ct);
+        return Result<AuthResult>.Success(authResult);
     }
 
     /// <inheritdoc />
