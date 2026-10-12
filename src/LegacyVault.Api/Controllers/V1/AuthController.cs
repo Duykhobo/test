@@ -94,9 +94,14 @@ public sealed class AuthController(IAuthService authService, AuthCookieWriter co
     {
         Request.Cookies.TryGetValue(AuthCookieNames.RefreshToken, out var refreshToken);
 
-        await authService.LogoutAsync(refreshToken, request?.RevokeAllDevices ?? false, ct);
+        var result = await authService.LogoutAsync(refreshToken, request?.RevokeAllDevices ?? false, ct);
+
+        if (result.IsFailure)
+        {
+            return Fail(result.Error!);
+        }
 
         cookies.Clear(Response);
-        return NoContent(); // 204: thành công, không có nội dung
+        return NoContent();
     }
 }

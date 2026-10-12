@@ -141,6 +141,12 @@ Dat LEGACYVAULT_TEST_CONNECTION_STRING toi SQL Server development da ap dung mig
 
 Chua bao phu HTTP/cookie middleware, refresh-logout dong thoi, loi mang luc commit, cac nhanh input/expiry/user status va cancellation trong check moi nay. Chua chay SQL checks trong CI vi chua cap SQL Server. JWT access da cap khong bi vo hieu ngay boi viec revoke refresh family.
 
+## Checkpoint logout family va moi thiet bi
+
+LogoutAsync da tra Task<Result>; controller chi clear cookie/tra 204 khi thanh cong, loi nghiep vu qua Fail. Logout hien tai idempotent voi cookie thieu/sai/khong ton tai va revoke toan family, ke ca cookie cu. Logout moi thiet bi chap nhan principal cua user active (cookie neu co phai cung user) hoac refresh token active cua Owner/Verifier active va khong bi khoa. Moi nhanh ghi dung transaction Serializable va commit truoc khi tra thanh cong; khong retry deadlock.
+
+RefreshRotationSqlChecks duoc mo rong cho logout: hai family cung user, user khac khong bi anh huong, cookie khac principal bi tu choi, logout lap lai/thieu/sai cookie, revoked token khong du quyen logout moi thiet bi, principal khong cookie, refresh active va rollback khi interceptor nem loi sau SQL SaveChanges nhung truoc commit. Moi assertion persistence dung context moi; fixture cleanup theo ID trong finally. Cung lenh chay nhu checkpoint refresh. Check dong thoi hien chi bao phu refresh-refresh; chua bao phu refresh-logout, HTTP/cookie, loi mang luc commit hoac moi nhanh expiry/status/cancellation.
+
 ```powershell
 dotnet run --file tests/security/LoginSessionSqlChecks.cs --configuration Release
 ```

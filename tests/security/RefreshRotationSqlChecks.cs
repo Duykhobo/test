@@ -107,7 +107,8 @@ internal static class RefreshRotationSqlChecks
                         family.Single(t => t.Id != concurrent.TokenId).Id,
                     "Concurrent refresh left duplicate or inconsistent replacements.");
             }
-            Console.WriteLine("PASS: absolute rotation, persistence policy, strict replay, signing rollback and overlapping refresh (one SQL deadlock victim).");
+            await CheckLogoutAsync(options, tokens, ids);
+            Console.WriteLine("PASS: absolute rotation, strict replay, signing rollback, overlapping refresh, logout scope/authorization/idempotency and save rollback.");
         }
         finally
         {
@@ -118,6 +119,92 @@ internal static class RefreshRotationSqlChecks
             await transaction.CommitAsync();
             Console.WriteLine("Fixture cleanup completed.");
         }
+    }
+
+    /// <summary>Verifies logout scope, principal/cookie ownership, revoked authorization and rollback.</summary>
+    private static async Task CheckLogoutAsync(DbContextOptions<AppDbContext> options,
+        ITokenService tokens, List<Guid> ids)
+    {
+        var owner = await SeedAsync(options, tokens, ids, persistent: false);
+        var other = await SeedAsync(options, tokens, ids, persistent: false);
+        Guid secondTokenId;
+        await using (var seed = new AppDbContext(options))
+        {
+            var now = DateTimeOffset.UtcNow;
+            var second = RefreshToken.Create(owner.UserId, tokens.CreateRefreshToken().Hash,
+                Guid.NewGuid(), false, now, tokens.RefreshTokenLifetime);
+            secondTokenId = second.Id;
+            seed.RefreshTokens.Add(second);
+            await seed.SaveChangesAsync();
+        }
+        await using (var db = new AppDbContext(options))
+        {
+            var service = Service(db, tokens, owner.UserId);
+            var mismatch = await service.LogoutAsync(other.Secret, true, CancellationToken.None);
+            Require(mismatch.IsFailure && mismatch.Error == AuthErrors.SessionExpired,
+                "Cross-user cookie was accepted for all-device logout.");
+        }
+        await using (var verify = new AppDbContext(options))
+            Require(!await verify.RefreshTokens.AnyAsync(t =>
+                (t.UserId == owner.UserId || t.UserId == other.UserId) && t.RevokedAt != null),
+                "Authorization failure changed fixture tokens.");
+        await using (var db = new AppDbContext(options))
+        {
+            var service = Service(db, tokens);
+            Require((await service.LogoutAsync(null, false, CancellationToken.None)).IsSuccess,
+                "Missing cookie was not an idempotent current logout.");
+            Require((await service.LogoutAsync("invalid-fixture-token", false, CancellationToken.None)).IsSuccess,
+                "Malformed cookie was not an idempotent current logout.");
+            Require((await service.LogoutAsync(owner.Secret, false, CancellationToken.None)).IsSuccess,
+                "Current logout failed.");
+        }
+        await using (var verify = new AppDbContext(options))
+        {
+            var owned = await verify.RefreshTokens.Where(t => t.UserId == owner.UserId).ToListAsync();
+            Require(owned.Single(t => t.Id == owner.TokenId).IsRevoked &&
+                !owned.Single(t => t.Id == secondTokenId).IsRevoked &&
+                !await verify.RefreshTokens.Where(t => t.UserId == other.UserId).AnyAsync(t => t.RevokedAt != null),
+                "Current logout crossed family or user boundaries.");
+        }
+        await using (var db = new AppDbContext(options))
+        {
+            Require((await Service(db, tokens).LogoutAsync(owner.Secret, false, CancellationToken.None)).IsSuccess,
+                "Repeated logout failed.");
+            var denied = await Service(db, tokens).LogoutAsync(owner.Secret, true, CancellationToken.None);
+            Require(denied.IsFailure && denied.Error == AuthErrors.SessionExpired,
+                "Revoked cookie authorized all-device logout.");
+        }
+        await using (var verify = new AppDbContext(options))
+            Require(!await verify.RefreshTokens.Where(t => t.Id == secondTokenId).AnyAsync(t => t.RevokedAt != null),
+                "Denied all-device request revoked another family.");
+        await using (var db = new AppDbContext(options))
+            Require((await Service(db, tokens, owner.UserId).LogoutAsync(null, true, CancellationToken.None)).IsSuccess,
+                "Valid principal without cookie could not log out all devices.");
+        await using (var verify = new AppDbContext(options))
+            Require(!await verify.RefreshTokens.AnyAsync(t => t.UserId == owner.UserId && t.RevokedAt == null),
+                "Principal all-device logout was not committed.");
+        await using (var db = new AppDbContext(options))
+            Require((await Service(db, tokens).LogoutAsync(other.Secret, true, CancellationToken.None)).IsSuccess,
+                "Active refresh token could not authorize all-device logout.");
+        await using (var verify = new AppDbContext(options))
+            Require(!await verify.RefreshTokens.AnyAsync(t => t.UserId == other.UserId && t.RevokedAt == null),
+                "Refresh-authorized all-device logout was not committed.");
+
+        var rollback = await SeedAsync(options, tokens, ids, persistent: false);
+        var failingOptions = new DbContextOptionsBuilder<AppDbContext>(options)
+            .AddInterceptors(new FailAfterSave()).Options;
+        await using (var db = new AppDbContext(failingOptions))
+        {
+            try
+            {
+                await Service(db, tokens).LogoutAsync(rollback.Secret, false, CancellationToken.None);
+                throw new InvalidOperationException("Controlled post-save failure was swallowed.");
+            }
+            catch (FixtureSaveException) { }
+        }
+        await using (var verify = new AppDbContext(options))
+            Require(!await verify.RefreshTokens.Where(t => t.Id == rollback.TokenId).AnyAsync(t => t.RevokedAt != null),
+                "Logout failure left a committed revocation.");
     }
 
     /// <summary>Creates a committed user and original token; only the hash is persisted.</summary>
@@ -156,8 +243,8 @@ internal static class RefreshRotationSqlChecks
     }
 
     /// <summary>Constructs the real use case without reading application secrets.</summary>
-    private static AuthService Service(AppDbContext db, ITokenService tokens) =>
-        new(db, new Argon2PasswordHasher(), tokens, new FixturePrincipal(), TimeProvider.System);
+    private static AuthService Service(AppDbContext db, ITokenService tokens, Guid? userId = null) =>
+        new(db, new Argon2PasswordHasher(), tokens, new FixturePrincipal(userId), TimeProvider.System);
 
     /// <summary>Fails the check without exposing bearer secrets.</summary>
     private static void Require(bool condition, string message)
@@ -169,12 +256,23 @@ internal static class RefreshRotationSqlChecks
     private sealed record Fixture(Guid UserId, Guid TokenId, string Secret);
 
     /// <summary>Refresh does not rely on an access principal.</summary>
-    private sealed class FixturePrincipal : ICurrentUser
+    private sealed class FixturePrincipal(Guid? userId) : ICurrentUser
     {
         /// <inheritdoc />
-        public bool IsAuthenticated => false;
+        public bool IsAuthenticated => userId is not null;
         /// <inheritdoc />
-        public Guid? UserId => null;
+        public Guid? UserId => userId;
+    }
+
+    /// <summary>Controlled failure after SQL writes and before transaction commit.</summary>
+    private sealed class FixtureSaveException : Exception { }
+
+    /// <summary>Throws only after the real save has completed inside the use-case transaction.</summary>
+    private sealed class FailAfterSave : SaveChangesInterceptor
+    {
+        /// <inheritdoc />
+        public override ValueTask<int> SavedChangesAsync(SaveChangesCompletedEventData eventData,
+            int result, CancellationToken ct = default) => throw new FixtureSaveException();
     }
 
     /// <summary>Controlled signer failure after the rotation save.</summary>

@@ -24,8 +24,8 @@ public interface IAuthService
     /// <param name="refreshToken">Token phiên hiện tại, có thể thiếu.</param>
     /// <param name="revokeAllDevices">Yêu cầu thu hồi mọi thiết bị.</param>
     /// <param name="ct">Token hủy request.</param>
-    /// <returns>Task hoàn tất sau khi lưu thay đổi hoặc no-op hợp lệ.</returns>
-    Task LogoutAsync(string? refreshToken, bool revokeAllDevices, CancellationToken ct);
+    /// <returns>Thành công sau commit hoặc no-op hợp lệ; lỗi khi không đủ bằng chứng phiên.</returns>
+    Task<Result> LogoutAsync(string? refreshToken, bool revokeAllDevices, CancellationToken ct);
 
     /// <summary>Đọc người dùng của principal đã được middleware xác thực.</summary>
     /// <param name="ct">Token hủy request.</param>
@@ -36,7 +36,7 @@ public interface IAuthService
 /// <summary>Khung Auth cho developer tự hoàn thiện nghiệp vụ trên .NET 10.</summary>
 /// <remarks>
 /// Đã triển khai đọc session, đăng nhập Owner/Verifier và refresh absolute với strict replay.
-/// Challenge Admin và logout chưa được triển khai.
+/// Đã triển khai logout theo family hoặc mọi thiết bị; challenge Admin chưa triển khai.
 /// </remarks>
 public sealed class AuthService : IAuthService
 {
@@ -237,15 +237,19 @@ public sealed class AuthService : IAuthService
         }
         await using var transaction = await _db.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct);
         RefreshToken? storedToken = await _db.RefreshTokens.Include(token => token.User).SingleOrDefaultAsync(token => token.TokenHash == tokenHash, ct);
-        if(storedToken is null){
+        if (storedToken is null)
+        {
             return Result<AuthResult>.Failure(AuthErrors.SessionExpired);
         }
         DateTimeOffset now = _timeProvider.GetUtcNow();
-        if (storedToken.IsRevoked) {
+        if (storedToken.IsRevoked)
+        {
             List<RefreshToken> familyTokens = await _db.RefreshTokens.Where(token => token.FamilyId == storedToken.FamilyId).ToListAsync(ct);
             now = _timeProvider.GetUtcNow();
-            foreach (RefreshToken familyToken in familyTokens){
-                if(!familyToken.IsRevoked){
+            foreach (RefreshToken familyToken in familyTokens)
+            {
+                if (!familyToken.IsRevoked)
+                {
                     familyToken.Revoke(now);
                 }
             }
@@ -254,13 +258,14 @@ public sealed class AuthService : IAuthService
             return Result<AuthResult>.Failure(AuthErrors.SessionExpired);
         }
         User user = storedToken.User;
-        if(storedToken.IsExpired(now) || user.Status != UserStatus.Active || user.Role == UserRole.Admin || user.IsLockedOut(now))
+        if (storedToken.IsExpired(now) || user.Status != UserStatus.Active || user.Role == UserRole.Admin || user.IsLockedOut(now))
         {
             return Result<AuthResult>.Failure(AuthErrors.SessionExpired);
         }
         now = _timeProvider.GetUtcNow();
         TimeSpan remainingLifetime = storedToken.ExpiresAt - now;
-        if( remainingLifetime <= TimeSpan.Zero){
+        if (remainingLifetime <= TimeSpan.Zero)
+        {
             return Result<AuthResult>.Failure(AuthErrors.SessionExpired);
         }
         GeneratedRefreshToken generatedRefreshToken = _tokenService.CreateRefreshToken();
@@ -297,26 +302,191 @@ public sealed class AuthService : IAuthService
     }
 
     /// <inheritdoc />
-    /// <exception cref="NotImplementedException">Developer chưa triển khai logout.</exception>
-    public Task LogoutAsync(string? refreshToken, bool revokeAllDevices, CancellationToken ct)
+    /// <exception cref="OperationCanceledException">Request bị hủy.</exception>
+    /// <remarks>
+    /// Logout mọi thiết bị yêu cầu principal hợp lệ hoặc refresh token active của user active.
+    /// Cookie khác user bị từ chối ở nhánh principal; lỗi persistence được truyền lên.
+    /// Thu hồi refresh token không tự vô hiệu access JWT đã cấp.
+    /// </remarks>
+    public async Task<Result> LogoutAsync(string? refreshToken, bool revokeAllDevices, CancellationToken ct)
     {
-        // TODO: [BẢN THIẾT KẾ THỰC THI - DEVELOPER BLUEPRINT]
-        // 1. [MỤC TIÊU & NGHIỆP VỤ]: Logout idempotent; kiểm soát quyền thu hồi mọi thiết bị.
-        // 2. [INPUT & OUTPUT]: Token tùy chọn, revokeAllDevices, principal qua ICurrentUser + ct -> Task.
-        // 3. [CÁC BƯỚC TUẦN TỰ]:
-        //    - Tải refresh record bằng hash nếu có; lấy user từ bằng chứng phiên hợp lệ.
-        //    - Logout hiện tại: thu hồi family; token thiếu có thể no-op theo policy.
-        //    - Logout tất cả: yêu cầu access principal hợp lệ hoặc refresh token còn active;
-        //      token hết hạn/revoked không được dùng làm bằng chứng quyền cho mọi thiết bị.
-        //    - Khi principal và cookie khác user, từ chối theo policy; không ưu tiên cookie tùy tiện.
-        //    - Phối hợp với rotation đồng thời và lưu revoke nguyên khối; Api xóa cookie sau thành công.
-        // 4. [HÀM / THƯ VIỆN]: ICurrentUser, ITokenService.HashRefreshToken, RefreshToken.IsActive/Revoke,
-        //    IAppDbContext, EF Core async + ct, TimeProvider. Trả lỗi quyền qua contract mới nếu cần;
-        //    cập nhật interface/controller cùng nhịp, không âm thầm bỏ qua yêu cầu thất bại.
-        // 5. [ĐIỀU KIỆN BIÊN & NGOẠI LỆ]: Gọi lặp, thiếu cookie, stale token, sai user, refresh đồng thời.
-        //    Chốt chính sách vô hiệu access token: revoke refresh không tự vô hiệu JWT đã cấp.
-        //    Không nuốt lỗi lưu DB để trả 204; propagate cancellation; không log secret.
-        throw new NotImplementedException(AuthErrors.ScaffoldNotImplemented);
+        ct.ThrowIfCancellationRequested();
+
+        if (revokeAllDevices)
+        {
+            Guid? principalUserId = _currentUser.UserId;
+
+            if (_currentUser.IsAuthenticated &&
+                principalUserId is { } userId &&
+                userId != Guid.Empty)
+            {
+                await using var allDevicesTransaction =
+                    await _db.BeginTransactionAsync(
+                        System.Data.IsolationLevel.Serializable,
+                        ct);
+
+                User? authenticatedUser = await _db.Users
+                    .SingleOrDefaultAsync(
+                        user => user.Id == userId,
+                        ct);
+
+                if (authenticatedUser is null ||
+                    authenticatedUser.Status != UserStatus.Active)
+                {
+                    return Result.Failure(AuthErrors.SessionExpired);
+                }
+                if (!string.IsNullOrWhiteSpace(refreshToken))
+                {
+                    string cookieTokenHash;
+
+                    try
+                    {
+                        cookieTokenHash = _tokenService.HashRefreshToken(refreshToken);
+                    }
+                    catch (ArgumentException)
+                    {
+                        return Result.Failure(AuthErrors.SessionExpired);
+                    }
+
+                    RefreshToken? cookieToken = await _db.RefreshTokens
+                        .SingleOrDefaultAsync(
+                            token => token.TokenHash == cookieTokenHash,
+                            ct);
+
+                    if (cookieToken is null || cookieToken.UserId != userId)
+                    {
+                        return Result.Failure(AuthErrors.SessionExpired);
+                    }
+                }
+                List<RefreshToken> userTokens = await _db.RefreshTokens
+                    .Where(token => token.UserId == userId)
+                    .ToListAsync(ct);
+
+                DateTimeOffset revokeAt = _timeProvider.GetUtcNow();
+
+                foreach (RefreshToken userToken in userTokens)
+                {
+                    if (!userToken.IsRevoked)
+                    {
+                        userToken.Revoke(revokeAt);
+                    }
+                }
+
+                await _db.SaveChangesAsync(ct);
+                await allDevicesTransaction.CommitAsync(ct);
+
+                return Result.Success();
+            }
+
+            if (string.IsNullOrWhiteSpace(refreshToken))
+            {
+                return Result.Failure(AuthErrors.SessionExpired);
+            }
+
+            string fallbackTokenHash;
+
+            try
+            {
+                fallbackTokenHash = _tokenService.HashRefreshToken(refreshToken);
+            }
+            catch (ArgumentException)
+            {
+                return Result.Failure(AuthErrors.SessionExpired);
+            }
+
+            await using var fallbackTransaction =
+                await _db.BeginTransactionAsync(
+                    System.Data.IsolationLevel.Serializable,
+                    ct);
+
+            RefreshToken? fallbackToken = await _db.RefreshTokens
+                .Include(token => token.User)
+                .SingleOrDefaultAsync(
+                    token => token.TokenHash == fallbackTokenHash,
+                    ct);
+
+            DateTimeOffset fallbackNow = _timeProvider.GetUtcNow();
+
+            if (fallbackToken is null ||
+                !fallbackToken.IsActive(fallbackNow) ||
+                fallbackToken.User.Status != UserStatus.Active ||
+                fallbackToken.User.IsLockedOut(fallbackNow) ||
+                fallbackToken.User.Role == UserRole.Admin)
+            {
+                return Result.Failure(AuthErrors.SessionExpired);
+            }
+
+            List<RefreshToken> fallbackUserTokens = await _db.RefreshTokens
+    .Where(token => token.UserId == fallbackToken.UserId)
+    .ToListAsync(ct);
+
+            fallbackNow = _timeProvider.GetUtcNow();
+
+            if (!fallbackToken.IsActive(fallbackNow))
+            {
+                return Result.Failure(AuthErrors.SessionExpired);
+            }
+
+            foreach (RefreshToken userToken in fallbackUserTokens)
+            {
+                if (!userToken.IsRevoked)
+                {
+                    userToken.Revoke(fallbackNow);
+                }
+            }
+
+            await _db.SaveChangesAsync(ct);
+            await fallbackTransaction.CommitAsync(ct);
+
+            return Result.Success();
+        }
+
+        if (string.IsNullOrWhiteSpace(refreshToken))
+        {
+            return Result.Success();
+        }
+
+        string tokenHash;
+
+        try
+        {
+            tokenHash = _tokenService.HashRefreshToken(refreshToken);
+        }
+        catch (ArgumentException)
+        {
+            return Result.Success();
+        }
+        await using var transaction = await _db.BeginTransactionAsync(
+    System.Data.IsolationLevel.Serializable,
+    ct);
+
+        RefreshToken? storedToken = await _db.RefreshTokens
+            .SingleOrDefaultAsync(
+                token => token.TokenHash == tokenHash,
+                ct);
+
+        if (storedToken is null)
+        {
+            return Result.Success();
+        }
+        List<RefreshToken> familyTokens = await _db.RefreshTokens
+    .Where(token => token.FamilyId == storedToken.FamilyId)
+    .ToListAsync(ct);
+
+        DateTimeOffset now = _timeProvider.GetUtcNow();
+
+        foreach (RefreshToken familyToken in familyTokens)
+        {
+            if (!familyToken.IsRevoked)
+            {
+                familyToken.Revoke(now);
+            }
+        }
+
+        await _db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
+
+        return Result.Success();
     }
 
     /// <inheritdoc />
