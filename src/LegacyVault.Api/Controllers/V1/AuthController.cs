@@ -5,22 +5,38 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.AspNetCore.Antiforgery;
 
 namespace LegacyVault.Api.Controllers.V1;
 
 /// <summary>
 /// Đăng nhập / làm mới phiên / xem phiên / đăng xuất.
-/// Contract backend mẫu; FE cần đối chiếu DTO trước tích hợp.
-/// Service đang là scaffold, chưa thể nghiệm thu chức năng xác thực.
+/// Cookie-auth endpoints use MVC antiforgery validation before service execution.
+/// Client integration and production browser acceptance require separate checks.
 /// </summary>
 [Route("api/v1/auth")]
-public sealed class AuthController(IAuthService authService, AuthCookieWriter cookies) : ApiControllerBase
+public sealed class AuthController(IAuthService authService, AuthCookieWriter cookies,
+    IAntiforgery antiforgery) : ApiControllerBase
 {
+    /// <summary>Issues identity-bound antiforgery proof without exposing authentication secrets.</summary>
+    /// <returns>Public request token and a framework-owned HttpOnly antiforgery cookie.</returns>
+    [HttpGet(AuthCsrfContract.TokenRoute)]
+    [AllowAnonymous]
+    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
+    [ProducesResponseType<ApiResponse<AuthCsrfTokenDto>>(StatusCodes.Status200OK)]
+    public IActionResult Csrf()
+    {
+        var tokens = antiforgery.GetAndStoreTokens(HttpContext);
+        return OkData(new AuthCsrfTokenDto(tokens.RequestToken
+            ?? throw new InvalidOperationException("Antiforgery request token was not issued.")));
+    }
+
     /// <summary>Nhận payload đăng nhập đã qua DataAnnotations và chuyển cho use case.</summary>
     /// <param name="request">Thông tin đăng nhập; không ghi log mật khẩu.</param>
     /// <param name="ct">Token hủy request.</param>
     /// <returns>Session công khai và cookie khi thành công, ProblemDetails khi thất bại.</returns>
     [HttpPost("login")]
+    [ValidateAntiForgeryToken]
     [AllowAnonymous]
     [ProducesResponseType<ApiResponse<AuthSessionDto>>(StatusCodes.Status200OK)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
@@ -44,6 +60,7 @@ public sealed class AuthController(IAuthService authService, AuthCookieWriter co
     /// <param name="ct">Token hủy request.</param>
     /// <returns>Session và cookie thay thế hoặc lỗi phiên.</returns>
     [HttpPost("refresh")]
+    [ValidateAntiForgeryToken]
     [AllowAnonymous]
     [ProducesResponseType<ApiResponse<AuthSessionDto>>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status401Unauthorized)]
@@ -89,6 +106,7 @@ public sealed class AuthController(IAuthService authService, AuthCookieWriter co
     /// <param name="ct">Token hủy request.</param>
     /// <returns>204 chỉ sau khi use case hoàn tất; lỗi không được coi là logout thành công.</returns>
     [HttpPost("logout")]
+    [ValidateAntiForgeryToken]
     [EnableRateLimiting(AuthRateLimitPolicies.Logout)]
     [AllowAnonymous]
     [ProducesResponseType(StatusCodes.Status204NoContent)]

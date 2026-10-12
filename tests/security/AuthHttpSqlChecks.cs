@@ -89,6 +89,14 @@ internal static class AuthHttpSqlChecks
                 using var client = new HttpClient(handler) { BaseAddress = baseUri, Timeout = TimeSpan.FromSeconds(30) };
                 using (var anonymous = await client.GetAsync(AuthPath + "session"))
                     Require(anonymous.StatusCode == HttpStatusCode.Unauthorized, "Anonymous session was accepted.");
+                using (var missingProof = await client.PostAsJsonAsync(AuthPath + "login",
+                    new { email, password = Password, rememberMe = remember }))
+                    Require(missingProof.StatusCode == HttpStatusCode.BadRequest,
+                        $"Login without antiforgery proof returned {(int)missingProof.StatusCode}, expected 400.");
+                loginRequests++;
+                Require(jar.GetCookies(new Uri(baseUri, AuthPath))[AuthCookieNames.RefreshToken] is null,
+                    "Rejected login created an auth cookie.");
+                await SetCsrfAsync(client, jar, baseUri);
                 using var login = await client.PostAsJsonAsync(AuthPath + "login",
                     new { email, password = Password, rememberMe = remember });
                 loginRequests++;
@@ -110,11 +118,40 @@ internal static class AuthHttpSqlChecks
                 string oldSecret = jar.GetCookies(new Uri(baseUri, AuthPath))[AuthCookieNames.RefreshToken]!.Value;
                 using (var session = await client.GetAsync(AuthPath + "session"))
                     Require(session.StatusCode == HttpStatusCode.OK, "Access cookie did not authenticate session.");
+                using (var staleAnonymousProof = await client.PostAsync(AuthPath + "refresh", null))
+                    Require(staleAnonymousProof.StatusCode == HttpStatusCode.BadRequest,
+                        "Pre-login anonymous proof was accepted for an authenticated identity.");
+                refreshRequests++;
+                client.DefaultRequestHeaders.Remove(AuthCsrfContract.HeaderName);
+                using (var missingProof = await client.PostAsync(AuthPath + "refresh", null))
+                    Require(missingProof.StatusCode == HttpStatusCode.BadRequest,
+                        "Refresh without antiforgery proof was accepted.");
+                refreshRequests++;
+                Require(jar.GetCookies(new Uri(baseUri, AuthPath))[AuthCookieNames.RefreshToken]!.Value == oldSecret,
+                    "Rejected refresh rotated the cookie.");
+                await SetCsrfAsync(client, jar, baseUri);
+                // Simulate an expired/absent access cookie: proof must be issued as anonymous.
+                jar.Add(baseUri, new Cookie(AuthCookieNames.AccessToken, "", AuthCookieNames.AccessTokenPath)
+                    { Expires = DateTime.UtcNow.AddDays(-1) });
+                using (var staleAuthenticatedProof = await client.PostAsync(AuthPath + "refresh", null))
+                    Require(staleAuthenticatedProof.StatusCode == HttpStatusCode.BadRequest,
+                        "Authenticated proof was accepted after access identity disappeared.");
+                refreshRequests++;
+                await SetCsrfAsync(client, jar, baseUri);
                 using (var rotated = await client.PostAsync(AuthPath + "refresh", null))
                     Require(rotated.StatusCode == HttpStatusCode.OK, "HTTP refresh failed.");
                 refreshRequests++;
                 Require(jar.GetCookies(new Uri(baseUri, AuthPath))[AuthCookieNames.RefreshToken]!.Value != oldSecret,
                     "Refresh cookie was not replaced.");
+                client.DefaultRequestHeaders.Remove(AuthCsrfContract.HeaderName);
+                client.DefaultRequestHeaders.Add(AuthCsrfContract.HeaderName, "invalid-proof");
+                using (var invalidProof = await client.PostAsync(AuthPath + "logout", null))
+                    Require(invalidProof.StatusCode == HttpStatusCode.BadRequest,
+                        "Logout with invalid antiforgery proof was accepted.");
+                logoutRequests++;
+                using (var session = await client.GetAsync(AuthPath + "session"))
+                    Require(session.StatusCode == HttpStatusCode.OK, "Rejected logout cleared the access cookie.");
+                await SetCsrfAsync(client, jar, baseUri);
                 using (var logout = await client.PostAsync(AuthPath + "logout", null))
                     Require(logout.StatusCode == HttpStatusCode.NoContent, "Bodyless HTTP logout failed.");
                 logoutRequests++;
@@ -122,17 +159,22 @@ internal static class AuthHttpSqlChecks
                     jar.GetCookies(baseUri)[AuthCookieNames.AccessToken] is null, "Logout did not clear cookie paths.");
                 using (var session = await client.GetAsync(AuthPath + "session"))
                     Require(session.StatusCode == HttpStatusCode.Unauthorized, "Cleared jar still authenticated.");
-                using var replayHandler = new HttpClientHandler { UseCookies = false };
+                var replayJar = new CookieContainer();
+                replayJar.Add(baseUri, new Cookie(AuthCookieNames.RefreshToken, oldSecret,
+                    AuthCookieNames.RefreshTokenPath));
+                using var replayHandler = new HttpClientHandler { CookieContainer = replayJar };
                 using var replayClient = new HttpClient(replayHandler) { BaseAddress = baseUri };
+                await SetCsrfAsync(replayClient, replayJar, baseUri);
                 using var replayRequest = new HttpRequestMessage(HttpMethod.Post, AuthPath + "refresh");
-                replayRequest.Headers.Add("Cookie", AuthCookieNames.RefreshToken + "=" + oldSecret);
                 using var replay = await replayClient.SendAsync(replayRequest);
                 refreshRequests++;
                 Require(replay.StatusCode == HttpStatusCode.Unauthorized && replay.Headers.Contains("Set-Cookie"),
                     "Old refresh cookie was accepted or failed refresh did not clear cookies.");
             }
-            using var limiterHandler = new HttpClientHandler { UseCookies = false };
+            var limiterJar = new CookieContainer();
+            using var limiterHandler = new HttpClientHandler { CookieContainer = limiterJar };
             using var limiterClient = new HttpClient(limiterHandler) { BaseAddress = baseUri };
+            await SetCsrfAsync(limiterClient, limiterJar, baseUri);
             await CheckLimitAsync(limiterClient, "login", AuthRateLimitPolicies.LoginPermitLimit - loginRequests,
                 HttpStatusCode.BadRequest);
             using (var spoof = new HttpRequestMessage(HttpMethod.Post, AuthPath + "login"))
@@ -150,7 +192,7 @@ internal static class AuthHttpSqlChecks
             using (var session = await limiterClient.GetAsync(AuthPath + "session"))
                 Require(session.StatusCode == HttpStatusCode.Unauthorized,
                     "Session incorrectly shared the exhausted logout policy.");
-            Console.WriteLine("PASS: HTTP cookies/session/refresh/logout; independent IP limits, 429/Retry-After and spoofed forwarded header rejected.");
+            Console.WriteLine("PASS: HTTP antiforgery/cookies/session/refresh/logout; independent IP limits, 429/Retry-After and spoofed forwarded header rejected.");
         }
         finally
         {
@@ -162,6 +204,28 @@ internal static class AuthHttpSqlChecks
             await transaction.CommitAsync();
             Console.WriteLine("HTTP fixture cleanup completed; host stopped.");
         }
+    }
+
+    /// <summary>Acquires fresh identity-bound proof and verifies the development cookie contract.</summary>
+    private static async Task SetCsrfAsync(HttpClient client, CookieContainer jar, Uri baseUri)
+    {
+        using var response = await client.GetAsync(AuthPath + AuthCsrfContract.TokenRoute);
+        Require(response.StatusCode == HttpStatusCode.OK && response.Headers.CacheControl?.NoStore == true,
+            "Antiforgery issuance failed or allowed caching.");
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        string? token = body.RootElement.GetProperty("data").GetProperty("requestToken").GetString();
+        Require(!string.IsNullOrWhiteSpace(token), "Antiforgery request token was absent.");
+        var cookie = jar.GetCookies(new Uri(baseUri, AuthPath))[AuthCsrfContract.CookieName];
+        Require(cookie is { HttpOnly: true, Secure: false } && cookie.Path == AuthCsrfContract.CookiePath,
+            "Development antiforgery cookie flags/path mismatch.");
+        if (response.Headers.TryGetValues("Set-Cookie", out var values))
+        {
+            var issued = SetCookieHeaderValue.ParseList(values.ToList())
+                .Single(c => c.Name.ToString() == AuthCsrfContract.CookieName);
+            Require(issued.SameSite == SameSiteMode.Lax, "Antiforgery cookie SameSite mismatch.");
+        }
+        client.DefaultRequestHeaders.Remove(AuthCsrfContract.HeaderName);
+        client.DefaultRequestHeaders.Add(AuthCsrfContract.HeaderName, token);
     }
 
     /// <summary>Consumes the remaining budget, checks endpoint independence and rejection metadata.</summary>

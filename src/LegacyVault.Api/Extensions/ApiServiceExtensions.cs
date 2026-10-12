@@ -23,7 +23,8 @@ public static class ApiServiceExtensions
     /// <returns>Service collection đã đăng ký hạ tầng HTTP.</returns>
     public static IServiceCollection AddApiServices(this IServiceCollection services, IConfiguration configuration)
     {
-        services.AddControllers()
+        // MVC antiforgery authorization filters require view-feature services, even for JSON actions.
+        services.AddControllersWithViews()
             .ConfigureApiBehaviorOptions(options =>
             {
                 // Khi DTO sai (thiếu email...), [ApiController] tự trả 400.
@@ -53,6 +54,19 @@ public static class ApiServiceExtensions
         services.AddProblemDetails();
         services.AddExceptionHandler<GlobalExceptionHandler>();
         services.AddScoped<AuthCookieWriter>();
+        services.AddOptions<Microsoft.AspNetCore.Antiforgery.AntiforgeryOptions>()
+            .Configure<IHostEnvironment>((options, environment) =>
+            {
+                options.HeaderName = AuthCsrfContract.HeaderName;
+                options.Cookie.Name = AuthCsrfContract.CookieName;
+                options.Cookie.Path = AuthCsrfContract.CookiePath;
+                options.Cookie.HttpOnly = true;
+                options.Cookie.SameSite = SameSiteMode.Lax;
+                options.Cookie.SecurePolicy = environment.IsDevelopment()
+                    ? CookieSecurePolicy.None
+                    : CookieSecurePolicy.Always;
+            });
+        services.AddAntiforgery();
 
         // CORS: FE chạy ở localhost:5173 (Vite), API ở localhost:5000 → khác origin.
         // Trình duyệt chặn trừ khi API cho phép rõ ràng. AllowCredentials để cookie được gửi kèm
@@ -65,22 +79,20 @@ public static class ApiServiceExtensions
             .AllowCredentials()));
 
         // TODO: [BẢN THIẾT KẾ THỰC THI - DEVELOPER BLUEPRINT]
-        // 1. [MỤC TIÊU & NGHIỆP VỤ]: Bảo vệ Auth trước brute force/CPU exhaustion và CSRF.
-        // 2. [INPUT & OUTPUT]: Policy do chủ module chốt + cấu hình deploy -> đăng ký limiter/CSRF.
+        // 1. [MỤC TIÊU & NGHIỆP VỤ]: Nghiệm thu CSRF/cookie và giới hạn Auth trên môi trường deploy.
+        // 2. [INPUT & OUTPUT]: Cấu hình deploy + HTTP/browser checks -> bằng chứng bảo vệ thực tế.
         // 3. [CÁC BƯỚC TUẦN TỰ]:
-        //    - Chốt ngưỡng, cửa sổ, partition và giới hạn đồng thời trước khi viết config.
-        //    - Đăng ký named policies cho login/refresh/logout và áp dụng tại endpoint tương ứng.
-        //    - Trả 429 + Retry-After an toàn; không đưa email/token vào key/log công khai.
-        //    - Chốt same-site/cross-site deployment; dùng antiforgery token hoặc kiểm tra origin
-        //      theo policy đã kiểm chứng cho các POST dùng cookie, bao gồm login/logout.
-        //    - Đăng ký dịch vụ kiểm tra và thống nhất header/token contract với FE.
+        //    - Giữ named limiter và MVC antiforgery trên login/refresh/logout.
+        //    - Đồng bộ FE cấp proof theo danh tính hiện tại; kiểm tra các auth transition nhiều tab.
+        //    - Chốt same-site deployment, HTTPS và proxy tin cậy trước nghiệm thu production.
+        //    - Audit các POST/PUT/PATCH/DELETE dùng cookie ngoài Auth trước tuyên bố CSRF toàn cục.
         // 4. [HÀM / THƯ VIỆN]: ASP.NET Core AddRateLimiter, partitioned limiter,
         //    EnableRateLimiting/RequireRateLimiting; AddAntiforgery nếu chọn antiforgery token.
         // 5. [ĐIỀU KIỆN BIÊN & NGOẠI LỆ]: NAT nhiều user, IP spoof qua proxy,
         //    proxy headers chỉ tin proxy cấu hình; limiter phải chạy trước Argon2.
         //    CORS và SameSite=Lax không thay thế toàn bộ CSRF policy; origin cùng site vẫn cần xét.
         //    Thiếu/sai CSRF proof phải từ chối trước mutation, cancellation phải propagate.
-        //    Chưa đăng ký limiter/CSRF ở scaffold này; không bật middleware khi thiếu dịch vụ.
+        //    Limiter và antiforgery đã đăng ký; HTTP checks không thay thế browser acceptance.
         services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
