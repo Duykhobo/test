@@ -147,6 +147,18 @@ LogoutAsync da tra Task<Result>; controller chi clear cookie/tra 204 khi thanh c
 
 RefreshRotationSqlChecks duoc mo rong cho logout: hai family cung user, user khac khong bi anh huong, cookie khac principal bi tu choi, logout lap lai/thieu/sai cookie, revoked token khong du quyen logout moi thiet bi, principal khong cookie, refresh active va rollback khi interceptor nem loi sau SQL SaveChanges nhung truoc commit. Moi assertion persistence dung context moi; fixture cleanup theo ID trong finally. Cung lenh chay nhu checkpoint refresh. Check dong thoi hien chi bao phu refresh-refresh; chua bao phu refresh-logout, HTTP/cookie, loi mang luc commit hoac moi nhanh expiry/status/cancellation.
 
+## Checkpoint HTTP cookie va refresh-logout dong thoi
+
+RefreshRotationSqlChecks da bo sung refresh-logout voi hai context va barrier truoc SQL write. Mot request commit, request kia la deadlock victim; neu logout commit thi family khong con token song. Neu refresh commit va logout that bai, replacement con song la hop le vi logout chua thanh cong. Mot logout tuong minh tiep theo bang cookie goc phai thu hoi ca replacement. Check doc lai bang context moi; khong bat retry tu dong.
+
+```powershell
+dotnet run --file tests/security/AuthHttpSqlChecks.cs --configuration Release
+```
+
+AuthHttpSqlChecks can cung LEGACYVAULT_TEST_CONNECTION_STRING development da migrate. Check tao Kestrel host loopback cong ngau nhien voi DI, controller va authentication middleware that; signing key fixture/config in-memory, khong goi Program.cs va khong chay InitializeDatabaseAsync. Host va fixture duoc don trong finally; khong doc secrets. Bao phu hai gia tri RememberMe, anonymous session 401, login 200, session qua cookie 200, refresh 200 thay cookie, logout khong body 204, cookie bi xoa dung path, session 401 sau xoa va cookie cu bi refresh tu choi 401. Kiem tra HttpOnly/SameSite/path, Secure=false trong Development, refresh Expires theo RememberMe va body khong co token/passwordHash.
+
+Day la HTTP qua HttpClient CookieContainer, chua phai trinh duyet: chua chung minh browser SameSite/CORS/CSRF, Secure=true tren HTTPS production, startup Program.cs, rate limiting, failure HTTP khi DB loi/deadlock hoac moi thiet bi qua HTTP. Guard CSRF/rate limiter van scaffold. SQL/HTTP checks nay chua nam trong CI khi CI chua cap SQL Server. Access JWT da cap van hieu luc den expiry; session 401 sau logout trong check la do client da xoa cookie, khong phai JWT bi revoke.
+
 ```powershell
 dotnet run --file tests/security/LoginSessionSqlChecks.cs --configuration Release
 ```

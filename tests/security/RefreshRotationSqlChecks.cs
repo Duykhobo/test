@@ -108,7 +108,30 @@ internal static class RefreshRotationSqlChecks
                     "Concurrent refresh left duplicate or inconsistent replacements.");
             }
             await CheckLogoutAsync(options, tokens, ids);
-            Console.WriteLine("PASS: absolute rotation, strict replay, signing rollback, overlapping refresh, logout scope/authorization/idempotency and save rollback.");
+            var race = await SeedAsync(options, tokens, ids, persistent: false);
+            var raceOptions = new DbContextOptionsBuilder<AppDbContext>()
+                .UseSqlServer(connection).AddInterceptors(new SaveBarrier()).Options;
+            using var raceTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(TimeoutSeconds));
+            bool[] raceOutcomes = await Task.WhenAll(
+                AttemptAsync(raceOptions, tokens, race.Secret, raceTimeout.Token),
+                AttemptAsync(raceOptions, tokens, race.Secret, raceTimeout.Token, logout: true));
+            Require(raceOutcomes.Count(success => success) == 1,
+                "Expected one commit and one deadlock victim in overlapping refresh/logout.");
+            await using (var verify = new AppDbContext(options))
+            {
+                var family = await verify.RefreshTokens.Where(t => t.UserId == race.UserId).ToListAsync();
+                Require(raceOutcomes[1]
+                    ? family.All(t => t.IsRevoked)
+                    : family.Count(t => !t.IsRevoked) == 1,
+                    "Successful logout left a live replacement or failed logout corrupted rotation.");
+            }
+            await using (var retry = new AppDbContext(options))
+                Require((await Service(retry, tokens).LogoutAsync(race.Secret, false, CancellationToken.None)).IsSuccess,
+                    "Explicit logout after contention failed.");
+            await using (var verify = new AppDbContext(options))
+                Require(!await verify.RefreshTokens.AnyAsync(t => t.UserId == race.UserId && t.RevokedAt == null),
+                    "Logout using original cookie missed a committed replacement.");
+            Console.WriteLine("PASS: absolute rotation, replay, rollback, logout authorization and overlapping refresh-refresh/refresh-logout.");
         }
         finally
         {
@@ -227,10 +250,16 @@ internal static class RefreshRotationSqlChecks
 
     /// <summary>Executes a contender; only an actual SQL deadlock is an accepted infrastructure outcome.</summary>
     private static async Task<bool> AttemptAsync(DbContextOptions<AppDbContext> options,
-        ITokenService tokens, string secret, CancellationToken ct)
+        ITokenService tokens, string secret, CancellationToken ct, bool logout = false)
     {
         await using var db = new AppDbContext(options);
-        try { return (await Service(db, tokens).RefreshAsync(secret, ct)).IsSuccess; }
+        try
+        {
+            var service = Service(db, tokens);
+            return logout
+                ? (await service.LogoutAsync(secret, false, ct)).IsSuccess
+                : (await service.RefreshAsync(secret, ct)).IsSuccess;
+        }
         catch (Exception exception) when (IsDeadlock(exception)) { return false; }
     }
 
