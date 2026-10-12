@@ -220,20 +220,33 @@ public sealed class AuthService : IAuthService
         // 1. [MỤC TIÊU & NGHIỆP VỤ]: Tiêu thụ refresh token một lần, xoay vòng và phát hiện replay.
         // 2. [INPUT & OUTPUT]: Refresh token từ cookie + ct -> Result<AuthResult> hoặc SessionExpired.
         // 3. [CÁC BƯỚC TUẦN TỰ]:
-        //    - Từ chối token thiếu/sai định dạng; hash token và tải bản ghi cùng user.
-        //    - Kiểm tra expiry, revoked, trạng thái user và policy phiên.
-        //    - Với replay, thu hồi family theo policy đã chốt và lưu trước khi trả lỗi.
-        //    - Tiêu thụ token cũ bằng cập nhật có điều kiện hoặc concurrency token;
-        //      chỉ request thắng mới được tạo token mới cùng family và ghi liên kết thay thế.
-        //    - Lưu revoke + token mới trong transaction; phối hợp family revocation với rotation
-        //      để refresh/logout đồng thời không tạo token sống sau khi family đã bị thu hồi.
-        //    - Trả kết quả sau commit; tầng Api chịu trách nhiệm cập nhật cookie.
+        //    a. Gọi ct.ThrowIfCancellationRequested(); token null/rỗng -> Failure(SessionExpired).
+        //       HashRefreshToken nhận nguyên chuỗi, không trim/đổi casing; chỉ bắt ArgumentException
+        //       quanh lời gọi hash để ánh xạ input sai thành SessionExpired, không bắt toàn use case.
+        //    b. Mở await using transaction qua BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct)
+        //       TRƯỚC mọi truy vấn DB; tải tracked token bằng TokenHash, Include(User), truyền ct.
+        //       Không tìm thấy -> SessionExpired; không dùng bản ghi cache/AsNoTracking cho rotation.
+        //    c. Đọc now từ TimeProvider sau khi truy vấn hoàn tất; xét IsRevoked trước IsExpired.
+        //       Với token revoked, áp dụng policy replay đã chốt: tải mọi token cùng FamilyId,
+        //       Revoke(now) các bản ghi chưa revoked, SaveChangesAsync(ct), CommitAsync(ct), rồi trả lỗi.
+        //       Return lỗi trước commit sẽ rollback việc thu hồi family; giữ token cũ để phát hiện replay.
+        //    d. Token hết hạn, user không Active hoặc bị khóa -> SessionExpired, không cấp phiên.
+        //       Admin vẫn chưa có contract chứng minh 2FA cho phiên: chưa cho refresh Admin hoạt động.
+        //    e. Sinh token mới; RefreshToken.Create dùng UserId, FamilyId, IsPersistent của token cũ.
+        //       Lifetime theo policy absolute/sliding đã chốt; không nhận RememberMe/role từ request.
+        //       oldToken.Revoke(now, newToken.Id); Add(newToken); SaveChangesAsync(ct) cùng transaction.
+        //    f. Ký access token, dựng UserDto/AuthSessionDto/AuthResult như nhánh login; ExpiresIn
+        //       tính từ expiry JWT và đồng hồ hiện tại. CommitAsync(ct) rồi mới trả Success.
+        //       Api cập nhật cookie sau thành công; lỗi ký token hoặc commit không được trả phiên mới.
         // 4. [HÀM / THƯ VIỆN]: ITokenService.HashRefreshToken/CreateRefreshToken/CreateAccessToken,
         //    RefreshToken.Create/Revoke, EF Core, IAppDbContext, TimeProvider, AuthErrors.SessionExpired.
-        //    Mở rộng persistence contract/migration khi thêm concurrency hoặc family state.
+        //    Include/SingleOrDefaultAsync/ToListAsync, BeginTransactionAsync(IsolationLevel.Serializable, ct).
         // 5. [ĐIỀU KIỆN BIÊN & NGOẠI LỆ]: Token thiếu/không tồn tại/hết hạn/revoked; hai refresh đồng thời.
-        //    SaveChanges transaction đơn lẻ không bảo vệ lần SELECT trước đó. Không retry mù để cấp hai token.
-        //    Chốt absolute/sliding expiry và policy replay khi nhiều tab cùng refresh.
+        //    Serializable có thể deadlock khi hai request cùng đọc rồi ghi: propagate lỗi, không retry mù.
+        //    Mọi đường logout/revoke phải dùng cùng giao thức và truy vấn toàn family trong transaction;
+        //    isolation riêng ở refresh không bảo vệ trước đường ghi khác không tuân thủ giao thức.
+        //    Chốt absolute/sliding expiry và strict replay (nhiều tab có thể làm mất phiên vừa xoay).
+        //    Check SQL hiện tại chỉ chứng minh isolation/rollback, chưa chứng minh rotation đồng thời.
         //    Propagate cancellation/lỗi DB; không log token; không trả token mới nếu commit thất bại.
         throw new NotImplementedException(AuthErrors.ScaffoldNotImplemented);
     }
@@ -264,20 +277,6 @@ public sealed class AuthService : IAuthService
     /// <inheritdoc />
     public async Task<Result<UserDto>> GetCurrentUserAsync(CancellationToken ct)
     {
-        // TODO: [BẢN THIẾT KẾ THỰC THI - DEVELOPER BLUEPRINT]
-        // 1. [MỤC TIÊU & NGHIỆP VỤ]: Trả người dùng công khai của phiên đã xác thực, không tin role header.
-        // 2. [INPUT & OUTPUT]: Principal qua ICurrentUser + ct -> Result<UserDto> hoặc SessionExpired.
-        // 3. [CÁC BƯỚC TUẦN TỰ]:
-        //    - Kiểm tra _currentUser.IsAuthenticated và UserId khác null/Guid.Empty;
-        //      không đạt thì trả Result<UserDto>.Failure(AuthErrors.SessionExpired).
-        //    - Tải user read-only; kiểm tra active và trạng thái phiên/thu hồi theo policy đã chốt.
-        //    - Map sang UserDto; không thay đổi DB, không đưa PasswordHash/token vào response.
-        // 4. [HÀM / THƯ VIỆN]: _currentUser.IsAuthenticated/UserId, _db.Users,
-        //    Microsoft.EntityFrameworkCore.AsNoTracking/SingleOrDefaultAsync + ct,
-        //    UserStatus.Active, UserDto.From, Result<UserDto>.Success/Failure.
-        // 5. [ĐIỀU KIỆN BIÊN & NGOẠI LỆ]: Principal thiếu/sai, user đã xóa/inactive, quyền thay đổi,
-        //    phiên đã revoke nhưng JWT chưa hết hạn. Hủy request/lỗi DB phải propagate.
-        //    Middleware phải kiểm tra JWT trước use case; không dùng X-Active-Role để cấp quyền.
         Guid? currentUserId = _currentUser.UserId;
         if (!_currentUser.IsAuthenticated || currentUserId is null || currentUserId == Guid.Empty)
         {

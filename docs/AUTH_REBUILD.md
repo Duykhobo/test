@@ -116,6 +116,19 @@ Cần đặt LEGACYVAULT_TEST_CONNECTION_STRING trước khi chạy. Check bao p
 
 LoginAsync đã cấp phiên cho Owner/Verifier sau khi mật khẩu đúng, user Active và không bị khóa. Guard Admin nằm trước transaction: challenge 2FA vẫn là TODO, hiện ném NotImplementedException và chưa có login Admin hoạt động. User và refresh hash được lưu trong transaction; ký access token, dựng DTO rồi commit trước khi trả AuthResult. Access token 15 phút, refresh token 7 ngày; RememberMe quyết định cookie persistent, không đổi lifetime server. Conflict ở nhánh cấp phiên được truyền lên và rollback, chưa tự retry. Refresh/logout còn scaffold.
 
+## Checkpoint blueprint refresh rotation
+
+- Use case: AUTH-REFRESH, `POST /api/v1/auth/refresh`; cookie đầu vào, `AuthSessionDto` và cookie mới sau commit. Đây là blueprint, endpoint chưa có nghiệp vụ refresh hoạt động.
+- Phân tầng: Application định nghĩa flow qua `IAppDbContext`/`ITokenService`; Infrastructure cung cấp transaction SQL Server. FE nối sau qua shared contract, entities user, features auth, app bootstrap.
+- Tệp MODIFY: `src/LegacyVault.Application/Features/Identity/AuthService.cs`, `docs/AUTH_REBUILD.md`. Không thay DTO, schema hoặc thêm dependency.
+- Micro-tasks: guard cancellation/input và hash; transaction Serializable trước SELECT; tải token/user; xử lý replay; kiểm tra user/expiry; tạo replacement cùng family; revoke/add/save; ký JWT và dựng response; commit rồi trả kết quả.
+- Ngoại lệ: chỉ chuyển lỗi định dạng từ lời gọi hash thành SessionExpired. Cancellation, lỗi ký, deadlock và lỗi commit được truyền lên; chưa retry tự động. Thu hồi family phải commit ngay cả khi kết quả trả về là lỗi phiên. Logout/revoke phải cùng bảo vệ truy vấn family để không bỏ sót replacement vừa được tạo.
+- Policy cần chốt trước khi hoàn thiện: absolute hay sliding expiry; strict replay có thu hồi phiên vừa được tab khác xoay hay không; điều kiện refresh Admin sau 2FA. Gợi ý cho giai đoạn Owner/Verifier là sliding theo `RefreshTokenLifetime` và strict family revocation; đây chưa phải policy đã được duyệt.
+
+DoD sau khi developer triển khai: build Release; SQL checks cho rotation thành công giữ FamilyId/IsPersistent, token thiếu/sai/hết hạn, user inactive/locked, replay đã commit thu hồi, lỗi ký rollback, cancellation và hai refresh/refresh-logout đồng thời. Kiểm tra persistence bằng context mới sau commit; không log bearer secret. Check transaction hiện tại chỉ xác nhận isolation/rollback, chưa thay thế các checks nghiệp vụ này.
+
+Manual HTTP: login Owner/Verifier, refresh bằng cookie hiện tại, kiểm tra cookie mới và DTO; gửi lại cookie cũ và kiểm tra policy replay; thử hai request đồng thời và logout trong lúc refresh. Chưa nghiệm thu các kịch bản này khi RefreshAsync còn ném NotImplementedException.
+
 ```powershell
 dotnet run --file tests/security/LoginSessionSqlChecks.cs --configuration Release
 ```
