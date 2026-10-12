@@ -10,6 +10,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Threading.Tasks;
 using LegacyVault.Api.Controllers.V1;
+using LegacyVault.Api.Common;
 using LegacyVault.Api.Extensions;
 using LegacyVault.Application;
 using LegacyVault.Domain.Identity;
@@ -58,6 +59,7 @@ internal static class AuthHttpSqlChecks
         app.UseRouting();
         app.UseCors(ApiServiceExtensions.FrontendCorsPolicy);
         app.UseAuthentication();
+        app.UseRateLimiter();
         app.UseAuthorization();
         app.MapControllers();
         var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlServer(connection).Options;
@@ -68,6 +70,9 @@ internal static class AuthHttpSqlChecks
             string address = app.Services.GetRequiredService<IServer>().Features
                 .Get<IServerAddressesFeature>()!.Addresses.Single();
             var baseUri = new Uri(address);
+            int loginRequests = 0;
+            int refreshRequests = 0;
+            int logoutRequests = 0;
             foreach (bool remember in new[] { false, true })
             {
                 var email = $"http-{Guid.NewGuid():N}@example.test";
@@ -86,6 +91,7 @@ internal static class AuthHttpSqlChecks
                     Require(anonymous.StatusCode == HttpStatusCode.Unauthorized, "Anonymous session was accepted.");
                 using var login = await client.PostAsJsonAsync(AuthPath + "login",
                     new { email, password = Password, rememberMe = remember });
+                loginRequests++;
                 Require(login.StatusCode == HttpStatusCode.OK, "HTTP login failed.");
                 var cookies = SetCookieHeaderValue.ParseList(login.Headers.GetValues("Set-Cookie").ToList());
                 var access = cookies.Single(c => c.Name.ToString() == AuthCookieNames.AccessToken);
@@ -106,10 +112,12 @@ internal static class AuthHttpSqlChecks
                     Require(session.StatusCode == HttpStatusCode.OK, "Access cookie did not authenticate session.");
                 using (var rotated = await client.PostAsync(AuthPath + "refresh", null))
                     Require(rotated.StatusCode == HttpStatusCode.OK, "HTTP refresh failed.");
+                refreshRequests++;
                 Require(jar.GetCookies(new Uri(baseUri, AuthPath))[AuthCookieNames.RefreshToken]!.Value != oldSecret,
                     "Refresh cookie was not replaced.");
                 using (var logout = await client.PostAsync(AuthPath + "logout", null))
                     Require(logout.StatusCode == HttpStatusCode.NoContent, "Bodyless HTTP logout failed.");
+                logoutRequests++;
                 Require(jar.GetCookies(new Uri(baseUri, AuthPath))[AuthCookieNames.RefreshToken] is null &&
                     jar.GetCookies(baseUri)[AuthCookieNames.AccessToken] is null, "Logout did not clear cookie paths.");
                 using (var session = await client.GetAsync(AuthPath + "session"))
@@ -119,10 +127,30 @@ internal static class AuthHttpSqlChecks
                 using var replayRequest = new HttpRequestMessage(HttpMethod.Post, AuthPath + "refresh");
                 replayRequest.Headers.Add("Cookie", AuthCookieNames.RefreshToken + "=" + oldSecret);
                 using var replay = await replayClient.SendAsync(replayRequest);
+                refreshRequests++;
                 Require(replay.StatusCode == HttpStatusCode.Unauthorized && replay.Headers.Contains("Set-Cookie"),
                     "Old refresh cookie was accepted or failed refresh did not clear cookies.");
             }
-            Console.WriteLine("PASS: real HTTP login/session/refresh/bodyless logout/rejected replay; cookie flags, paths, persistence and secret-free response.");
+            using var limiterHandler = new HttpClientHandler { UseCookies = false };
+            using var limiterClient = new HttpClient(limiterHandler) { BaseAddress = baseUri };
+            await CheckLimitAsync(limiterClient, "login", AuthRateLimitPolicies.LoginPermitLimit - loginRequests,
+                HttpStatusCode.BadRequest);
+            using (var spoof = new HttpRequestMessage(HttpMethod.Post, AuthPath + "login"))
+            {
+                spoof.Headers.Add("X-Forwarded-For", "192.0.2.123");
+                spoof.Content = JsonContent.Create(new { });
+                using var rejected = await limiterClient.SendAsync(spoof);
+                Require(rejected.StatusCode == HttpStatusCode.TooManyRequests,
+                    "Untrusted forwarded header bypassed the IP limiter.");
+            }
+            await CheckLimitAsync(limiterClient, "refresh", AuthRateLimitPolicies.SessionPermitLimit - refreshRequests,
+                HttpStatusCode.Unauthorized);
+            await CheckLimitAsync(limiterClient, "logout", AuthRateLimitPolicies.SessionPermitLimit - logoutRequests,
+                HttpStatusCode.NoContent);
+            using (var session = await limiterClient.GetAsync(AuthPath + "session"))
+                Require(session.StatusCode == HttpStatusCode.Unauthorized,
+                    "Session incorrectly shared the exhausted logout policy.");
+            Console.WriteLine("PASS: HTTP cookies/session/refresh/logout; independent IP limits, 429/Retry-After and spoofed forwarded header rejected.");
         }
         finally
         {
@@ -134,6 +162,26 @@ internal static class AuthHttpSqlChecks
             await transaction.CommitAsync();
             Console.WriteLine("HTTP fixture cleanup completed; host stopped.");
         }
+    }
+
+    /// <summary>Consumes the remaining budget, checks endpoint independence and rejection metadata.</summary>
+    private static async Task CheckLimitAsync(HttpClient client, string action, int remaining,
+        HttpStatusCode allowedStatus)
+    {
+        for (int index = 0; index < remaining; index++)
+        {
+            using var allowed = action == "login"
+                ? await client.PostAsJsonAsync(AuthPath + action, new { })
+                : await client.PostAsync(AuthPath + action, null);
+            Require(allowed.StatusCode == allowedStatus, "Endpoint rejected before its own budget was exhausted.");
+        }
+        using var rejected = action == "login"
+            ? await client.PostAsJsonAsync(AuthPath + action, new { })
+            : await client.PostAsync(AuthPath + action, null);
+        Require(rejected.StatusCode == HttpStatusCode.TooManyRequests &&
+            rejected.Headers.RetryAfter?.Delta is { } delay && delay > TimeSpan.Zero &&
+            delay <= AuthRateLimitPolicies.Window,
+            "Exhausted endpoint did not return 429 with bounded positive Retry-After.");
     }
 
     /// <summary>Fails without including credentials or bearer values in diagnostics.</summary>

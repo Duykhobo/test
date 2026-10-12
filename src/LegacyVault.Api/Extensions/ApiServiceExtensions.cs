@@ -1,6 +1,9 @@
 using System.Text.Json;
 using LegacyVault.Api.Common;
 using Microsoft.AspNetCore.Mvc;
+using System.Net;
+using System.Threading.RateLimiting;
+using System.Globalization;
 
 namespace LegacyVault.Api.Extensions;
 
@@ -78,6 +81,51 @@ public static class ApiServiceExtensions
         //    CORS và SameSite=Lax không thay thế toàn bộ CSRF policy; origin cùng site vẫn cần xét.
         //    Thiếu/sai CSRF proof phải từ chối trước mutation, cancellation phải propagate.
         //    Chưa đăng ký limiter/CSRF ở scaffold này; không bật middleware khi thiếu dịch vụ.
+        services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.OnRejected = (context, ct) =>
+{
+    if (context.Lease.TryGetMetadata(
+        MetadataName.RetryAfter,
+        out TimeSpan retryAfter))
+    {
+        int seconds = checked((int)Math.Max(
+            1,
+            Math.Ceiling(retryAfter.TotalSeconds)));
+
+        context.HttpContext.Response.Headers.RetryAfter =
+            seconds.ToString(CultureInfo.InvariantCulture);
+    }
+
+    return ValueTask.CompletedTask;
+};
+
+    var policies = new[]
+    {
+        (AuthRateLimitPolicies.Login,
+            AuthRateLimitPolicies.LoginPermitLimit),
+        (AuthRateLimitPolicies.Refresh,
+            AuthRateLimitPolicies.SessionPermitLimit),
+        (AuthRateLimitPolicies.Logout,
+            AuthRateLimitPolicies.SessionPermitLimit)
+    };
+
+    foreach (var (policyName, permitLimit) in policies)
+    {
+        options.AddPolicy(policyName, context =>
+            RateLimitPartition.GetFixedWindowLimiter(
+                context.Connection.RemoteIpAddress?.MapToIPv6()
+                    ?? IPAddress.IPv6None,
+                _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = permitLimit,
+                    Window = AuthRateLimitPolicies.Window,
+                    QueueLimit = AuthRateLimitPolicies.QueueLimit,
+                    AutoReplenishment = true
+                }));
+    }
+});
 
         return services;
     }

@@ -4,6 +4,7 @@ using LegacyVault.Infrastructure.Security;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace LegacyVault.Api.Controllers.V1;
 
@@ -23,6 +24,7 @@ public sealed class AuthController(IAuthService authService, AuthCookieWriter co
     [AllowAnonymous]
     [ProducesResponseType<ApiResponse<AuthSessionDto>>(StatusCodes.Status200OK)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
+    [EnableRateLimiting(AuthRateLimitPolicies.Login)]
     public async Task<IActionResult> Login([FromBody] LoginRequest request, CancellationToken ct)
     {
         var result = await authService.LoginAsync(request, ct);
@@ -45,6 +47,7 @@ public sealed class AuthController(IAuthService authService, AuthCookieWriter co
     [AllowAnonymous]
     [ProducesResponseType<ApiResponse<AuthSessionDto>>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status401Unauthorized)]
+    [EnableRateLimiting(AuthRateLimitPolicies.Refresh)]
     public async Task<IActionResult> Refresh(CancellationToken ct)
     {
         Request.Cookies.TryGetValue(AuthCookieNames.RefreshToken, out var refreshToken);
@@ -86,6 +89,7 @@ public sealed class AuthController(IAuthService authService, AuthCookieWriter co
     /// <param name="ct">Token hủy request.</param>
     /// <returns>204 chỉ sau khi use case hoàn tất; lỗi không được coi là logout thành công.</returns>
     [HttpPost("logout")]
+    [EnableRateLimiting(AuthRateLimitPolicies.Logout)]
     [AllowAnonymous]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     public async Task<IActionResult> Logout(

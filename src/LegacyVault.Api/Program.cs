@@ -26,20 +26,7 @@ app.UseRouting();           // xác định endpoint trước các policy phụ 
 app.UseCors(ApiServiceExtensions.FrontendCorsPolicy); // trước Authentication để preflight OPTIONS không bị 401
 app.UseAuthentication();     // đọc cookie/JWT → điền HttpContext.User
 
-// TODO: [BẢN THIẾT KẾ THỰC THI - DEVELOPER BLUEPRINT]
-// 1. [MỤC TIÊU & NGHIỆP VỤ]: Lắp limiter và kiểm tra CSRF trước khi Auth use case chạy.
-// 2. [INPUT & OUTPUT]: HttpContext + endpoint metadata + policy đã đăng ký -> tiếp tục hoặc từ chối.
-// 3. [CÁC BƯỚC TUẦN TỰ]:
-//    - Hoàn thiện đăng ký trong AddApiServices và metadata policy ở AuthController.
-//    - Thêm UseRateLimiter sau routing; đặt sau authentication nếu partition cần principal.
-//    - Đặt CSRF sau authentication/authorization theo cơ chế đã chọn, trước controller mutation.
-//    - Nếu dùng UseAntiforgery, đặt sau UseAuthorization và bảo đảm MVC endpoint thực sự validate;
-//      middleware đơn lẻ không tự bảo vệ mọi MVC action. Kiểm tra filter/metadata tương ứng.
-//    - Xử lý trusted forwarded headers trước HTTPS/routing nếu triển khai sau proxy.
-// 4. [HÀM / THƯ VIỆN]: ASP.NET Core middleware, UseRateLimiter, antiforgery/filter theo policy.
-// 5. [ĐIỀU KIỆN BIÊN & NGOẠI LỆ]: OPTIONS preflight, anonymous login/refresh,
-//    cookie thiếu, origin sai/thiếu và reverse proxy. Không dùng role header làm bằng chứng quyền.
-//    Kiểm tra 429/Retry-After và CSRF reject trước khi gọi service; hiện các guard này chưa triển khai.
+app.UseRateLimiter();
 app.UseAuthorization();      // kiểm tra [Authorize]
 
 app.MapControllers();
